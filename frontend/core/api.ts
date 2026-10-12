@@ -11,11 +11,16 @@ import { dataEvents } from './dataEvents';
 
 const DEFAULT_TARGETS = {
   calories_target: 2000,
-  protein_target_g: 120,
+  protein_g_target: 140,
+  protein_target_g: 140,
+  carbs_g_target: 250,
   carbs_target_g: 250,
+  fats_g_target: 60,
   fats_target_g: 60,
-  fiber_target_g: 25,
+  fiber_g_target: 28,
+  fiber_target_g: 28,
   water_target_ml: 2500,
+  weekly_workouts_target: 4,
 };
 
 // Checagem rápida de conectividade
@@ -297,18 +302,20 @@ async function executeSupabaseGet(endpoint: string, params?: any): Promise<any> 
     const startStr = startDate.toISOString().split('T')[0];
     const endStr = endDate.toISOString().split('T')[0];
 
-    const [foodRes, waterRes, weightRes, targetsRes, streakRes] = await Promise.all([
+    const [foodRes, waterRes, weightRes, targetsRes, streakRes, exercisesRes] = await Promise.all([
       supabase.from('food_logs').select('*').eq('user_id', user.id).gte('date', startStr).lte('date', endStr),
       supabase.from('water_logs').select('*').eq('user_id', user.id).gte('date', startStr).lte('date', endStr),
       supabase.from('weight_logs').select('*').eq('user_id', user.id).order('date', { ascending: false }).limit(30),
       supabase.from('daily_targets').select('*').eq('user_id', user.id).maybeSingle(),
       supabase.from('streaks').select('*').eq('user_id', user.id).maybeSingle(),
+      supabase.from('exercise_logs').select('*').eq('user_id', user.id).gte('date', startStr).lte('date', endStr),
     ]);
 
     const targets = targetsRes.data || DEFAULT_TARGETS;
     const foodData = foodRes.data || [];
     const waterData = waterRes.data || [];
     const weightData = weightRes.data || [];
+    const exercisesData = exercisesRes.data || [];
 
     const dailyData: any[] = [];
     for (let i = 0; i < days; i++) {
@@ -317,6 +324,7 @@ async function executeSupabaseGet(endpoint: string, params?: any): Promise<any> 
       const dStr = d.toISOString().split('T')[0];
       const dayFoods = foodData.filter((f) => f.date === dStr);
       const dayWaters = waterData.filter((w) => w.date === dStr);
+      const dayExercises = exercisesData.filter((e) => e.date === dStr);
 
       dailyData.push({
         date: dStr,
@@ -327,6 +335,8 @@ async function executeSupabaseGet(endpoint: string, params?: any): Promise<any> 
           fats: dayFoods.reduce((acc, f) => acc + Number(f.fats_g || 0), 0),
           fiber: dayFoods.reduce((acc, f) => acc + Number(f.fiber_g || 0), 0),
           water: dayWaters.reduce((acc, w) => acc + Number(w.amount_ml || 0), 0),
+          exerciseMinutes: dayExercises.reduce((acc, e) => acc + Number(e.duration_minutes || 0), 0),
+          exerciseCalories: dayExercises.reduce((acc, e) => acc + Number(e.calories_burned || 0), 0),
         },
         targets,
       });
@@ -343,15 +353,47 @@ async function executeSupabaseGet(endpoint: string, params?: any): Promise<any> 
       streak: streakRes.data || { current_streak: 0, best_streak: 0 },
       weight_trend: Math.round(weightTrend * 10) / 10,
       weight_logs: weightData,
+      exercises: exercisesData,
     };
   }
 
-  // 13. Ranking Semanal por Hábitos (View Anti-Fraude)
+  // 13. Grupos do Usuário
+  if (endpoint === '/api/groups/my') {
+    if (!user) return [];
+    const { data } = await supabase
+      .from('group_members')
+      .select('group_id, role, joined_at, groups(id, name, description, invite_code, owner_id)')
+      .eq('user_id', user.id);
+    return (data || []).map((m: any) => ({
+      ...m.groups,
+      role: m.role,
+      joined_at: m.joined_at,
+    }));
+  }
+
+  // 14. Ranking Semanal por Hábitos (View Anti-Fraude)
   if (endpoint === '/api/groups/leaderboard') {
+    const groupId = params?.group_id;
+    if (groupId) {
+      const { data: members } = await supabase
+        .from('group_members')
+        .select('user_id')
+        .eq('group_id', groupId);
+      const memberIds = (members || []).map((m: any) => m.user_id);
+      if (memberIds.length === 0) return [];
+      const { data } = await supabase
+        .from('view_weekly_habit_leaderboard')
+        .select('*')
+        .in('user_id', memberIds)
+        .order('total_habit_points', { ascending: false });
+      return data || [];
+    }
+
     const { data } = await supabase
       .from('view_weekly_habit_leaderboard')
       .select('*')
-      .order('total_habit_points', { ascending: false });
+      .order('total_habit_points', { ascending: false })
+      .limit(50);
     return data || [];
   }
 
@@ -460,6 +502,62 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
         .single();
       if (error) throw error;
       return data;
+    }
+
+    // Criar Grupo
+    if (endpoint === '/api/groups/create') {
+      const code = 'AK' + Math.random().toString(36).substring(2, 6).toUpperCase();
+      const { data: newGroup, error: groupErr } = await supabase
+        .from('groups')
+        .insert({
+          name: body.name,
+          description: body.description || null,
+          invite_code: code,
+          owner_id: user!.id,
+        })
+        .select()
+        .single();
+      if (groupErr) throw groupErr;
+
+      // Adiciona o criador como admin
+      await supabase.from('group_members').insert({
+        group_id: newGroup.id,
+        user_id: user!.id,
+        role: 'admin',
+        share_consistency: true,
+        share_workouts: true,
+      });
+
+      return newGroup;
+    }
+
+    // Entrar em Grupo com Código de Convite
+    if (endpoint === '/api/groups/join') {
+      const inviteCode = (body.invite_code || '').trim().toUpperCase();
+      const { data: targetGroup, error: findErr } = await supabase
+        .from('groups')
+        .select('id, name')
+        .eq('invite_code', inviteCode)
+        .single();
+      if (findErr || !targetGroup) throw new Error('Código de convite inválido ou grupo não encontrado.');
+
+      const { data: member, error: memberErr } = await supabase
+        .from('group_members')
+        .insert({
+          group_id: targetGroup.id,
+          user_id: user!.id,
+          role: 'member',
+          share_consistency: true,
+          share_workouts: true,
+        })
+        .select()
+        .single();
+      if (memberErr) {
+        if (memberErr.code === '23505') throw new Error('Você já faz parte deste grupo!');
+        throw memberErr;
+      }
+
+      return { success: true, group: targetGroup };
     }
   }
 

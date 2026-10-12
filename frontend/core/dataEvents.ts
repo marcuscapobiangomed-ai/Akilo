@@ -8,7 +8,8 @@ type EventName =
   | 'water_logged'
   | 'weight_logged'
   | 'profile_updated'
-  | 'targets_updated';
+  | 'targets_updated'
+  | 'exercise_logged';
 
 type Listener = () => void;
 

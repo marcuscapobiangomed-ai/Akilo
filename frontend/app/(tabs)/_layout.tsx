@@ -59,45 +59,45 @@ export default function TabLayout() {
       <Tabs.Screen 
         name="index" 
         options={{
-          title: 'Home',
+          title: 'Início',
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon icon={Home} label="Home" color={color} focused={focused} />
+            <TabIcon icon={Home} label="Início" color={color} focused={focused} />
           ),
         }} 
       />
       <Tabs.Screen 
         name="food" 
         options={{
-          title: 'Add',
+          title: 'Alimentos',
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon icon={Utensils} label="Add" color={color} focused={focused} />
+            <TabIcon icon={Utensils} label="Alimentos" color={color} focused={focused} />
           ),
         }} 
       />
       <Tabs.Screen 
         name="history" 
         options={{
-          title: 'Log',
+          title: 'Diário',
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon icon={ClipboardList} label="Log" color={color} focused={focused} />
+            <TabIcon icon={ClipboardList} label="Diário" color={color} focused={focused} />
           ),
         }} 
       />
       <Tabs.Screen 
         name="analytics" 
         options={{
-          title: 'Stats',
+          title: 'Progresso',
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon icon={TrendingUp} label="Stats" color={color} focused={focused} />
+            <TabIcon icon={TrendingUp} label="Progresso" color={color} focused={focused} />
           ),
         }} 
       />
       <Tabs.Screen 
         name="profile" 
         options={{
-          title: 'Profile',
+          title: 'Perfil',
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon icon={User} label="Me" color={color} focused={focused} />
+            <TabIcon icon={User} label="Perfil" color={color} focused={focused} />
           ),
         }} 
       />

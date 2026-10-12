@@ -1,13 +1,24 @@
-
-import { useState, useCallback, useEffect } from 'react';
-import { View, Text, FlatList, TouchableOpacity, Modal, ActivityIndicator, StyleSheet, TextInput, Dimensions, ScrollView } from 'react-native';
+import { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  Modal,
+  ActivityIndicator,
+  StyleSheet,
+  TextInput,
+  Dimensions,
+  ScrollView,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Slider from '@react-native-community/slider';
 import { api } from '../../core/api';
-import { Plus, X, Search, Heart, SlidersHorizontal } from 'lucide-react-native';
+import { Plus, X, Search, Heart, Sparkles, Check, AlertCircle } from 'lucide-react-native';
 import { useToast } from '../../components/Toast';
 import { searchFoodsLocal } from '../../core/foodDB';
 import { dataEvents } from '../../core/dataEvents';
+import { calculatePortion, CalculatedNutrients } from '../../core/domain/nutritionEngine';
 
 const { width } = Dimensions.get('window');
 
@@ -18,62 +29,79 @@ interface Food {
   protein_g: number;
   carbs_g: number;
   fats_g: number;
+  fiber_g?: number | null;
+  sodium_mg?: number | null;
   base_qty: number;
   unit_type: string;
+  data_source?: string;
+  brand?: string;
+  preparation_type?: string;
   user_id?: string;
   is_custom?: boolean;
-  is_favorite?: boolean;
 }
+
+const MEALS_PT = [
+  { key: 'breakfast', label: 'Café da Manhã' },
+  { key: 'lunch', label: 'Almoço' },
+  { key: 'snacks', label: 'Lanches' },
+  { key: 'dinner', label: 'Jantar' },
+];
+
+const QUICK_GRAM_BUTTONS = [50, 100, 150, 200, 300];
 
 export default function FoodSearch() {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<{master: Food[], custom: Food[]}>({ master: [], custom: [] });
+  const [results, setResults] = useState<{ master: Food[]; custom: Food[] }>({ master: [], custom: [] });
   const [loading, setLoading] = useState(false);
   const [selectedFood, setSelectedFood] = useState<Food | null>(null);
   const [qty, setQty] = useState(100);
   const [mealType, setMealType] = useState('breakfast');
-  const [activeTab, setActiveTab] = useState('recent');
+  const [activeTab, setActiveTab] = useState<'recent' | 'favorites' | 'custom'>('recent');
   const [showCustomModal, setShowCustomModal] = useState(false);
   const [loggingFood, setLoggingFood] = useState(false);
-  
-  // Tab data
+
+  // Dados das abas
   const [recentFoods, setRecentFoods] = useState<Food[]>([]);
   const [favoriteFoods, setFavoriteFoods] = useState<Food[]>([]);
   const [customFoods, setCustomFoods] = useState<Food[]>([]);
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
-  
-  // Custom food form
+
+  // Formulário de alimento personalizado
   const [customName, setCustomName] = useState('');
   const [customCalories, setCustomCalories] = useState('');
   const [customProtein, setCustomProtein] = useState('');
   const [customCarbs, setCustomCarbs] = useState('');
   const [customFats, setCustomFats] = useState('');
+  const [customFiber, setCustomFiber] = useState('');
   const [customBaseQty, setCustomBaseQty] = useState('100');
   const [customUnit, setCustomUnit] = useState('g');
   const [savingCustom, setSavingCustom] = useState(false);
+
   const { showToast } = useToast();
 
   const searchFood = async () => {
-    if (!query) return;
+    if (!query.trim()) return;
     setLoading(true);
     try {
-      // Try local DB first (works offline)
+      // 1. Tenta buscar no cache local
       const localResults = await searchFoodsLocal(query);
       if (localResults.length > 0) {
-        const master = localResults.filter(f => f.source === 'master');
-        const custom = localResults.filter(f => f.source === 'custom').map(f => ({ ...f, is_custom: true }));
-        setResults({ master, custom });
+        const master = localResults.filter((f) => f.source === 'master');
+        const custom = localResults
+          .filter((f) => f.source === 'custom')
+          .map((f) => ({ ...f, is_custom: true }));
+        setResults({ master: master as any, custom: custom as any });
         setLoading(false);
         return;
       }
 
-      // Fallback to API
-      const res = await api.get('/api/food/search', { q: query });
+      // 2. Busca online via Supabase (Trigram)
+      const res = await api.get('/api/food/search', { q: query.trim() });
       const customWithFlag = (res.custom || []).map((f: Food) => ({ ...f, is_custom: true }));
       setResults({ master: res.master || [], custom: customWithFlag });
     } catch (e) {
-      console.error("Search error:", e);
-      showToast('Failed to search food', 'error');
+      console.error('Erro na busca de alimentos:', e);
+      showToast('Falha ao buscar alimentos', 'error');
     } finally {
       setLoading(false);
     }
@@ -81,60 +109,78 @@ export default function FoodSearch() {
 
   const handleLogFood = async () => {
     if (!selectedFood) return;
-    
+
     setLoggingFood(true);
-    const factor = qty / selectedFood.base_qty;
-    
+    const calculated: CalculatedNutrients = calculatePortion(
+      {
+        base_qty: selectedFood.base_qty,
+        calories: selectedFood.calories,
+        protein_g: selectedFood.protein_g,
+        carbs_g: selectedFood.carbs_g,
+        fats_g: selectedFood.fats_g,
+        fiber_g: selectedFood.fiber_g,
+        sodium_mg: selectedFood.sodium_mg,
+      },
+      qty,
+      selectedFood.unit_type
+    );
+
     try {
       const payload = {
         date: new Date().toISOString().split('T')[0],
         meal_type: mealType,
-        food_source: selectedFood.user_id ? 'custom' : 'master',
-        food_master_id: selectedFood.user_id ? null : selectedFood.id,
-        food_custom_id: selectedFood.user_id ? selectedFood.id : null,
+        food_source: selectedFood.is_custom || selectedFood.user_id ? 'custom' : 'master',
+        food_master_id: selectedFood.is_custom || selectedFood.user_id ? null : selectedFood.id,
+        food_custom_id: selectedFood.is_custom || selectedFood.user_id ? selectedFood.id : null,
         food_name: selectedFood.name,
+        brand: selectedFood.brand || null,
         qty: qty,
-        calories: Math.round(selectedFood.calories * factor),
-        protein_g: Math.round(selectedFood.protein_g * factor * 10) / 10,
-        carbs_g: Math.round(selectedFood.carbs_g * factor * 10) / 10,
-        fats_g: Math.round(selectedFood.fats_g * factor * 10) / 10
+        unit_type: selectedFood.unit_type || 'g',
+        calories: calculated.calories,
+        protein_g: calculated.protein_g,
+        carbs_g: calculated.carbs_g,
+        fats_g: calculated.fats_g,
+        fiber_g: calculated.fiber_g,
+        sodium_mg: calculated.sodium_mg,
       };
-      
-      console.log("Logging food:", payload);
+
       await api.post('/api/food/log', payload);
-      showToast(`${selectedFood.name} added to ${mealType}!`, 'success');
+      const mealName = MEALS_PT.find((m) => m.key === mealType)?.label || mealType;
+      showToast(`${selectedFood.name} adicionado ao ${mealName}!`, 'success');
       setSelectedFood(null);
       setQty(100);
     } catch (e) {
-      console.error("Log food error:", e);
-      showToast('Failed to log food. Please try again.', 'error');
+      console.error('Erro ao registrar alimento:', e);
+      showToast('Falha ao registrar alimento. Tente novamente.', 'error');
     } finally {
       setLoggingFood(false);
     }
   };
 
   const handleSaveCustomFood = async () => {
-    if (!customName || !customCalories) {
-      showToast('Please enter at least name and calories', 'error');
+    if (!customName.trim() || !customCalories.trim()) {
+      showToast('Informe o nome e as calorias do alimento', 'error');
       return;
     }
 
     setSavingCustom(true);
     try {
       await api.post('/api/food/custom', {
-        name: customName,
+        name: customName.trim(),
         calories: parseFloat(customCalories) || 0,
         protein_g: parseFloat(customProtein) || 0,
         carbs_g: parseFloat(customCarbs) || 0,
         fats_g: parseFloat(customFats) || 0,
+        fiber_g: customFiber ? parseFloat(customFiber) : null,
         base_qty: parseFloat(customBaseQty) || 100,
-        unit_type: customUnit
+        unit_type: customUnit,
       });
-      showToast('Custom food saved!', 'success');
+      showToast('Alimento personalizado cadastrado!', 'success');
       resetCustomForm();
       setShowCustomModal(false);
+      loadCustom();
     } catch (e) {
-      showToast('Failed to save custom food', 'error');
+      showToast('Falha ao salvar alimento', 'error');
     } finally {
       setSavingCustom(false);
     }
@@ -146,11 +192,11 @@ export default function FoodSearch() {
     setCustomProtein('');
     setCustomCarbs('');
     setCustomFats('');
+    setCustomFiber('');
     setCustomBaseQty('100');
     setCustomUnit('g');
   };
 
-  // Load favorites
   const loadFavorites = async () => {
     setLoading(true);
     try {
@@ -159,84 +205,71 @@ export default function FoodSearch() {
       const ids = new Set<string>((faves || []).map((f: Food) => f.id));
       setFavoriteIds(ids);
     } catch (e) {
-      console.error('Load favorites error:', e);
+      console.error('Erro ao carregar favoritos:', e);
     } finally {
       setLoading(false);
     }
   };
 
-  // Load recent foods
   const loadRecent = async () => {
     setLoading(true);
     try {
       const recent = await api.get('/api/food/recent');
       setRecentFoods(recent || []);
     } catch (e) {
-      console.error('Load recent error:', e);
+      console.error('Erro ao carregar recentes:', e);
     } finally {
       setLoading(false);
     }
   };
 
-  // Load custom foods
   const loadCustom = async () => {
     setLoading(true);
     try {
       const custom = await api.get('/api/food/search', { q: '' });
-      // Mark custom foods with is_custom flag
       const customWithFlag = (custom.custom || []).map((f: Food) => ({ ...f, is_custom: true }));
       setCustomFoods(customWithFlag);
     } catch (e) {
-      console.error('Load custom error:', e);
+      console.error('Erro ao carregar personalizados:', e);
     } finally {
       setLoading(false);
     }
   };
 
-  // Toggle favorite
   const toggleFavorite = async (food: Food) => {
     const isFavorite = favoriteIds.has(food.id);
-    // Custom foods have user_id field, master foods don't
     const isCustomFood = !!food.user_id || food.is_custom || false;
-    
+
     try {
       if (isFavorite) {
         await api.delete(`/api/food/favorites/${food.id}`);
-        setFavoriteIds(prev => {
-          const newSet = new Set(prev);
-          newSet.delete(food.id);
-          return newSet;
+        setFavoriteIds((prev) => {
+          const next = new Set(prev);
+          next.delete(food.id);
+          return next;
         });
-        showToast('Removed from favorites', 'success');
+        showToast('Removido dos favoritos', 'success');
       } else {
-        console.log('Adding to favorites:', { food_id: food.id, is_custom: isCustomFood, has_user_id: !!food.user_id });
         await api.post(`/api/food/favorites/${food.id}`, { is_custom: isCustomFood });
-        setFavoriteIds(prev => new Set(prev).add(food.id));
-        showToast('Added to favorites', 'success');
+        setFavoriteIds((prev) => new Set(prev).add(food.id));
+        showToast('Adicionado aos favoritos', 'success');
       }
-      
-      // Reload favorites if on favorites tab
+
       if (activeTab === 'favorites') {
         loadFavorites();
       }
     } catch (e) {
-      console.error('Toggle favorite error:', e);
-      showToast('Failed to update favorites', 'error');
+      console.error('Erro ao alternar favorito:', e);
+      showToast('Falha ao atualizar favoritos', 'error');
     }
   };
 
-  // Load data when tab changes
   useEffect(() => {
-    if (activeTab === 'recent') {
-      loadRecent();
-    } else if (activeTab === 'favorites') {
-      loadFavorites();
-    } else if (activeTab === 'custom') {
-      loadCustom();
-    }
+    if (activeTab === 'recent') loadRecent();
+    else if (activeTab === 'favorites') loadFavorites();
+    else if (activeTab === 'custom') loadCustom();
   }, [activeTab]);
 
-  // Auto-refresh when food data changes from other pages
   useEffect(() => {
     const refreshActiveTab = () => {
       if (activeTab === 'recent') loadRecent();
@@ -246,195 +279,291 @@ export default function FoodSearch() {
     const unsub1 = dataEvents.on('food_logged', refreshActiveTab);
     const unsub2 = dataEvents.on('food_deleted', refreshActiveTab);
     const unsub3 = dataEvents.on('food_edited', refreshActiveTab);
-    return () => { unsub1(); unsub2(); unsub3(); };
+    return () => {
+      unsub1(); unsub2(); unsub3();
+    };
   }, [activeTab]);
 
-  const getMacroColor = (type: string) => {
-    switch(type) {
-      case 'protein': return '#22c55e';
-      case 'carbs': return '#6b7280';
-      case 'fats': return '#6b7280';
-      default: return '#6b7280';
-    }
-  };
-
   const getSliderConfig = (unitType: string) => {
-    if (unitType === 'serving') {
-      return { min: 0, max: 20, step: 1, unit: 'serving' };
+    if (unitType === 'unidade' || unitType === 'serving') {
+      return { min: 0.5, max: 10, step: 0.5, unit: unitType };
     }
-    return { min: 0, max: 500, step: 5, unit: unitType };
+    return { min: 5, max: 500, step: 5, unit: unitType || 'g' };
   };
 
-  const renderFoodItem = ({ item }: { item: Food }) => (
-    <TouchableOpacity 
-      onPress={() => { setSelectedFood(item); setQty(item.base_qty); }}
-      style={styles.foodCard}
-    >
-      <View style={styles.foodImagePlaceholder}>
-        <Text style={styles.foodEmoji}>🍽️</Text>
-      </View>
-      <View style={styles.foodInfo}>
-        <Text style={styles.foodName}>{item.name}</Text>
-        <Text style={styles.foodServing}>{item.base_qty}{item.unit_type} serving</Text>
-        <Text style={styles.foodMacros}>
-          <Text style={styles.foodCalories}>{item.calories} kcal</Text>
-          <Text style={styles.foodMacroDetail}> • {item.protein_g}g P  {item.carbs_g}g C  {item.fats_g}g F</Text>
-        </Text>
-      </View>
-      <TouchableOpacity style={styles.addFoodBtn}>
-        <Plus color="#22c55e" size={20} />
+  // Render do Alimento na Lista
+  const renderFoodItem = ({ item }: { item: Food }) => {
+    const isTBCA = !item.is_custom && !item.user_id;
+
+    return (
+      <TouchableOpacity
+        onPress={() => {
+          setSelectedFood(item);
+          setQty(item.base_qty || 100);
+        }}
+        style={styles.foodCard}
+        activeOpacity={0.7}
+      >
+        <View style={styles.foodImagePlaceholder}>
+          <Text style={styles.foodEmoji}>🥗</Text>
+        </View>
+
+        <View style={styles.foodInfo}>
+          <View style={styles.foodTitleRow}>
+            <Text style={styles.foodName} numberOfLines={1}>
+              {item.name}
+            </Text>
+            {isTBCA ? (
+              <View style={styles.tbcaBadge}>
+                <Text style={styles.tbcaBadgeText}>TBCA</Text>
+              </View>
+            ) : (
+              <View style={styles.customBadge}>
+                <Text style={styles.customBadgeText}>Criado</Text>
+              </View>
+            )}
+          </View>
+
+          <Text style={styles.foodServing}>
+            Porção padrão: {item.base_qty || 100}{item.unit_type || 'g'}
+            {item.preparation_type ? ` • ${item.preparation_type}` : ''}
+          </Text>
+
+          <View style={styles.foodMacrosRow}>
+            <Text style={styles.foodCalories}>{item.calories} kcal</Text>
+            <Text style={styles.foodMacroP}> • {item.protein_g}g P</Text>
+            <Text style={styles.foodMacroC}> • {item.carbs_g}g C</Text>
+            <Text style={styles.foodMacroF}> • {item.fats_g}g G</Text>
+            {item.fiber_g != null && (
+              <Text style={styles.foodMacroFib}> • {item.fiber_g}g Fib</Text>
+            )}
+          </View>
+        </View>
+
+        <View style={styles.addFoodBtn}>
+          <Plus color="#22c55e" size={20} />
+        </View>
       </TouchableOpacity>
-    </TouchableOpacity>
-  );
-
-  const calcMacros = (food: Food) => {
-    const factor = qty / food.base_qty;
-    return {
-      calories: Math.round(food.calories * factor),
-      protein: Math.round(food.protein_g * factor * 10) / 10,
-      carbs: Math.round(food.carbs_g * factor * 10) / 10,
-      fats: Math.round(food.fats_g * factor * 10) / 10
-    };
+    );
   };
+
+  const calculatedModalNutrients = selectedFood
+    ? calculatePortion(
+        {
+          base_qty: selectedFood.base_qty,
+          calories: selectedFood.calories,
+          protein_g: selectedFood.protein_g,
+          carbs_g: selectedFood.carbs_g,
+          fats_g: selectedFood.fats_g,
+          fiber_g: selectedFood.fiber_g,
+          sodium_mg: selectedFood.sodium_mg,
+        },
+        qty,
+        selectedFood.unit_type
+      )
+    : null;
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Search Bar */}
+      {/* Barra de Pesquisa */}
       <View style={styles.searchContainer}>
         <View style={styles.searchInputWrapper}>
           <Search color="#6b7280" size={20} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search for food (e.g., Avocado)"
+            placeholder="Buscar alimentos (ex: Arroz, Frango, Tapioca)..."
             placeholderTextColor="#6b7280"
             value={query}
-            onChangeText={setQuery}
+            onChangeText={(text) => {
+              setQuery(text);
+              if (!text.trim()) {
+                setResults({ master: [], custom: [] });
+              }
+            }}
             onSubmitEditing={searchFood}
             returnKeyType="search"
           />
+          {query.length > 0 && (
+            <TouchableOpacity onPress={() => { setQuery(''); setResults({ master: [], custom: [] }); }}>
+              <X color="#9ca3af" size={18} />
+            </TouchableOpacity>
+          )}
         </View>
-        <TouchableOpacity style={styles.filterButton}>
-          <SlidersHorizontal color="#ffffff" size={20} />
+
+        <TouchableOpacity style={styles.searchSubmitBtn} onPress={searchFood}>
+          <Search color="#0a1a15" size={18} />
         </TouchableOpacity>
       </View>
 
-      {/* Tabs */}
-      <View style={styles.tabsContainer}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsScroll}>
-          {['Recent', 'Favorites', 'Custom'].map((tab) => (
-            <TouchableOpacity 
-              key={tab}
-              onPress={() => setActiveTab(tab.toLowerCase())}
-              style={[styles.tab, activeTab === tab.toLowerCase() && styles.tabActive]}
+      {/* Abas de Navegação */}
+      {!query && (
+        <View style={styles.tabsContainer}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsScroll}>
+            <TouchableOpacity
+              onPress={() => setActiveTab('recent')}
+              style={[styles.tab, activeTab === 'recent' && styles.tabActive]}
             >
-              <Text style={[styles.tabText, activeTab === tab.toLowerCase() && styles.tabTextActive]}>{tab}</Text>
+              <Text style={[styles.tabText, activeTab === 'recent' && styles.tabTextActive]}>Recentes</Text>
             </TouchableOpacity>
-          ))}
-          <TouchableOpacity style={styles.createCustomBtn} onPress={() => setShowCustomModal(true)}>
-            <Plus color="#22c55e" size={16} />
-            <Text style={styles.createCustomText}>New</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      </View>
 
-      {/* Results */}
+            <TouchableOpacity
+              onPress={() => setActiveTab('favorites')}
+              style={[styles.tab, activeTab === 'favorites' && styles.tabActive]}
+            >
+              <Text style={[styles.tabText, activeTab === 'favorites' && styles.tabTextActive]}>Favoritos</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => setActiveTab('custom')}
+              style={[styles.tab, activeTab === 'custom' && styles.tabActive]}
+            >
+              <Text style={[styles.tabText, activeTab === 'custom' && styles.tabTextActive]}>Meus Alimentos</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.createCustomBtn} onPress={() => setShowCustomModal(true)}>
+              <Plus color="#22c55e" size={16} />
+              <Text style={styles.createCustomText}>Cadastrar Alimento</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      )}
+
+      {/* Lista de Resultados */}
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator color="#22c55e" size="large" />
+          <Text style={styles.loadingText}>Buscando base de dados brasileira...</Text>
         </View>
       ) : (
         <FlatList
-          data={query ? [...results.custom, ...results.master] : 
-                activeTab === 'recent' ? recentFoods :
-                activeTab === 'favorites' ? favoriteFoods :
-                activeTab === 'custom' ? customFoods : []}
+          data={
+            query
+              ? [...results.custom, ...results.master]
+              : activeTab === 'recent'
+              ? recentFoods
+              : activeTab === 'favorites'
+              ? favoriteFoods
+              : customFoods
+          }
           keyExtractor={(item) => item.id}
           renderItem={renderFoodItem}
           contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyEmoji}>
-                {activeTab === 'recent' && '⏰'}
-                {activeTab === 'favorites' && '❤️'}
-                {activeTab === 'custom' && '✏️'}
-                {!activeTab && '🔍'}
+                {query ? '🔍' : activeTab === 'recent' ? '⏰' : activeTab === 'favorites' ? '❤️' : '🥗'}
               </Text>
               <Text style={styles.emptyText}>
-                {activeTab === 'recent' && 'No recent foods yet'}
-                {activeTab === 'favorites' && 'No favorites yet'}
-                {activeTab === 'custom' && 'No custom foods yet'}
-                {!activeTab && 'Search for food to get started'}
+                {query
+                  ? 'Nenhum alimento encontrado'
+                  : activeTab === 'recent'
+                  ? 'Nenhum histórico recente'
+                  : activeTab === 'favorites'
+                  ? 'Nenhum favorito salvo'
+                  : 'Nenhum alimento personalizado'}
               </Text>
               <Text style={styles.emptySubtext}>
-                {activeTab === 'recent' && 'Start logging food to see it here'}
-                {activeTab === 'favorites' && 'Tap the heart to add favorites'}
-                {activeTab === 'custom' && 'Create custom foods with the + button'}
-                {!activeTab && 'Try "chicken", "rice", or "banana"'}
+                {query
+                  ? 'Tente termos simples como "arroz", "banana", "ovo" ou cadastre um alimento novo.'
+                  : activeTab === 'recent'
+                  ? 'Os alimentos registrados nas refeições aparecerão aqui para repetição rápida.'
+                  : activeTab === 'favorites'
+                  ? 'Toque no coração ao selecionar um alimento para salvá-lo aqui.'
+                  : 'Cadastre ingredientes ou receitas próprias tocando no botão "+ Cadastrar Alimento".'}
               </Text>
             </View>
           }
         />
       )}
 
-      {/* Food Detail Modal with Slider */}
+      {/* MODAL DE AJUSTE DE PORÇÃO & REGISTRO */}
       <Modal visible={!!selectedFood} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            {/* Handle bar */}
             <View style={styles.modalHandle} />
-            
-            {/* Header */}
+
+            {/* Cabeçalho do Modal */}
             <View style={styles.modalHeader}>
-              <View>
-                <Text style={styles.modalTitle}>{selectedFood?.name}</Text>
-                <Text style={styles.modalSubtitle}>
-                  {selectedFood?.base_qty}{selectedFood?.unit_type} serving • 
-                  <Text style={styles.highProtein}> High Protein</Text>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={styles.modalTitle} numberOfLines={2}>
+                  {selectedFood?.name}
                 </Text>
+                <View style={styles.sourceTagRow}>
+                  <Text style={styles.modalSubtitle}>
+                    Base: {selectedFood?.base_qty}{selectedFood?.unit_type || 'g'}
+                  </Text>
+                  <View style={styles.originBadge}>
+                    <Text style={styles.originBadgeText}>
+                      {selectedFood?.is_custom ? 'Receita Própria' : 'TBCA • USP'}
+                    </Text>
+                  </View>
+                </View>
               </View>
-              <TouchableOpacity 
+
+              <TouchableOpacity
                 style={styles.favoriteBtn}
                 onPress={() => selectedFood && toggleFavorite(selectedFood)}
               >
-                <Heart 
-                  color={selectedFood && favoriteIds.has(selectedFood.id) ? "#ef4444" : "#6b7280"}
-                  fill={selectedFood && favoriteIds.has(selectedFood.id) ? "#ef4444" : "transparent"}
-                  size={24} 
+                <Heart
+                  color={selectedFood && favoriteIds.has(selectedFood.id) ? '#ef4444' : '#6b7280'}
+                  fill={selectedFood && favoriteIds.has(selectedFood.id) ? '#ef4444' : 'transparent'}
+                  size={24}
                 />
               </TouchableOpacity>
             </View>
 
-            {/* Macro Cards */}
-            {selectedFood && (
+            {/* 5 Cards de Macronutrientes (Com Fibras) */}
+            {calculatedModalNutrients && (
               <View style={styles.macroRow}>
                 <View style={styles.macroBox}>
-                  <Text style={styles.macroBoxValue}>{calcMacros(selectedFood).calories}</Text>
+                  <Text style={styles.macroBoxValue}>{calculatedModalNutrients.calories}</Text>
                   <Text style={styles.macroBoxLabel}>KCAL</Text>
                 </View>
                 <View style={[styles.macroBox, styles.macroBoxHighlight]}>
-                  <Text style={[styles.macroBoxValue, styles.macroBoxValueHighlight]}>{calcMacros(selectedFood).protein}g</Text>
+                  <Text style={[styles.macroBoxValue, styles.macroBoxValueHighlight]}>
+                    {calculatedModalNutrients.protein_g}g
+                  </Text>
                   <Text style={[styles.macroBoxLabel, styles.macroBoxLabelHighlight]}>PROT</Text>
                 </View>
                 <View style={styles.macroBox}>
-                  <Text style={styles.macroBoxValue}>{calcMacros(selectedFood).carbs}g</Text>
+                  <Text style={styles.macroBoxValue}>{calculatedModalNutrients.carbs_g}g</Text>
                   <Text style={styles.macroBoxLabel}>CARB</Text>
                 </View>
                 <View style={styles.macroBox}>
-                  <Text style={styles.macroBoxValue}>{calcMacros(selectedFood).fats}g</Text>
-                  <Text style={styles.macroBoxLabel}>FAT</Text>
+                  <Text style={styles.macroBoxValue}>{calculatedModalNutrients.fats_g}g</Text>
+                  <Text style={styles.macroBoxLabel}>GORD</Text>
+                </View>
+                <View style={styles.macroBox}>
+                  <Text style={styles.macroBoxValue}>{calculatedModalNutrients.fiber_g}g</Text>
+                  <Text style={styles.macroBoxLabel}>FIBR</Text>
                 </View>
               </View>
             )}
 
-            {/* Quantity Slider */}
+            {/* Alerta de Completude de Dados se Fibra for Nula */}
+            {calculatedModalNutrients?.hasIncompleteData && (
+              <View style={styles.incompleteDataBanner}>
+                <AlertCircle color="#f59e0b" size={14} />
+                <Text style={styles.incompleteDataText}>
+                  Teor de fibras não detalhado na tabela de origem para este item.
+                </Text>
+              </View>
+            )}
+
+            {/* Ajuste de Porção */}
             {selectedFood && (() => {
               const sliderCfg = getSliderConfig(selectedFood.unit_type);
               return (
                 <View style={styles.sliderSection}>
                   <View style={styles.sliderHeader}>
-                    <Text style={styles.sliderLabel}>Quantity</Text>
-                    <Text style={styles.sliderValue}>{qty}<Text style={styles.sliderUnit}>{sliderCfg.unit === 'serving' ? ` serving${qty !== 1 ? 's' : ''}` : sliderCfg.unit}</Text></Text>
+                    <Text style={styles.sliderLabel}>Quantidade Consumida</Text>
+                    <Text style={styles.sliderValue}>
+                      {qty}
+                      <Text style={styles.sliderUnit}> {sliderCfg.unit}</Text>
+                    </Text>
                   </View>
+
                   <Slider
                     style={styles.slider}
                     minimumValue={sliderCfg.min}
@@ -446,84 +575,95 @@ export default function FoodSearch() {
                     maximumTrackTintColor="#1f3d32"
                     thumbTintColor="#22c55e"
                   />
-                  <View style={styles.sliderRange}>
-                    <Text style={styles.sliderRangeText}>0{sliderCfg.unit !== 'serving' ? sliderCfg.unit : ''}</Text>
-                    <Text style={styles.sliderRangeText}>{sliderCfg.max / 2}{sliderCfg.unit !== 'serving' ? sliderCfg.unit : ''}</Text>
-                    <Text style={styles.sliderRangeText}>{sliderCfg.max}{sliderCfg.unit !== 'serving' ? sliderCfg.unit : ''}</Text>
+
+                  {/* Botões Rápidos de Gramagem */}
+                  <View style={styles.quickGramsRow}>
+                    {QUICK_GRAM_BUTTONS.map((g) => (
+                      <TouchableOpacity
+                        key={g}
+                        onPress={() => setQty(g)}
+                        style={[styles.quickGramBtn, qty === g && styles.quickGramBtnActive]}
+                      >
+                        <Text style={[styles.quickGramText, qty === g && styles.quickGramTextActive]}>
+                          {g}g
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
                   </View>
                 </View>
               );
             })()}
 
-            {/* Meal Type Selection */}
-            <Text style={styles.mealLabel}>Meal</Text>
+            {/* Seleção do Tipo de Refeição */}
+            <Text style={styles.mealLabel}>Refeição de Destino</Text>
             <View style={styles.mealButtons}>
-              {['breakfast', 'lunch', 'snacks', 'dinner'].map(m => (
-                <TouchableOpacity 
-                  key={m}
-                  onPress={() => setMealType(m)}
-                  style={[styles.mealButton, mealType === m && styles.mealButtonActive]}
+              {MEALS_PT.map((m) => (
+                <TouchableOpacity
+                  key={m.key}
+                  onPress={() => setMealType(m.key)}
+                  style={[styles.mealButton, mealType === m.key && styles.mealButtonActive]}
                 >
-                  <Text style={[styles.mealButtonText, mealType === m && styles.mealButtonTextActive]}>
-                    {m.charAt(0).toUpperCase() + m.slice(1)}
+                  <Text style={[styles.mealButtonText, mealType === m.key && styles.mealButtonTextActive]}>
+                    {m.label}
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
 
-            {/* Action Buttons */}
-            <TouchableOpacity 
-              style={[styles.addButton, loggingFood && styles.addButtonDisabled]} 
+            {/* Ações */}
+            <TouchableOpacity
+              style={[styles.addButton, loggingFood && styles.addButtonDisabled]}
               onPress={handleLogFood}
               disabled={loggingFood}
             >
               <Text style={styles.addButtonText}>
-                {loggingFood ? 'Adding...' : 'Add to Diary'}
+                {loggingFood ? 'Adicionando ao diário...' : 'Adicionar ao Diário'}
               </Text>
             </TouchableOpacity>
+
             <TouchableOpacity style={styles.cancelButton} onPress={() => setSelectedFood(null)}>
-              <Text style={styles.cancelButtonText}>Cancel</Text>
+              <Text style={styles.cancelButtonText}>Cancelar</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* Custom Food Modal */}
+      {/* MODAL DE CRIAÇÃO DE ALIMENTO PERSONALIZADO */}
       <Modal visible={showCustomModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { maxHeight: '85%' }]}>
+          <View style={[styles.modalContent, { maxHeight: '90%' }]}>
             <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Create Custom Food</Text>
+              <Text style={styles.modalTitle}>Cadastrar Alimento</Text>
               <TouchableOpacity onPress={() => { resetCustomForm(); setShowCustomModal(false); }}>
                 <X color="#6b7280" size={24} />
               </TouchableOpacity>
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
-              <Text style={styles.inputLabel}>Food Name *</Text>
+              <Text style={styles.inputLabel}>Nome do Alimento ou Receita *</Text>
               <TextInput
                 style={styles.input}
                 value={customName}
                 onChangeText={setCustomName}
-                placeholder="e.g. Homemade Dal"
+                placeholder="ex: Panqueca de Aveia com Banana"
                 placeholderTextColor="#6b7280"
               />
 
               <View style={styles.rowInputs}>
                 <View style={styles.halfInput}>
-                  <Text style={styles.inputLabel}>Calories *</Text>
+                  <Text style={styles.inputLabel}>Calorias (kcal) *</Text>
                   <TextInput
                     style={styles.input}
                     value={customCalories}
                     onChangeText={setCustomCalories}
                     keyboardType="numeric"
-                    placeholder="0"
+                    placeholder="ex: 180"
                     placeholderTextColor="#6b7280"
                   />
                 </View>
                 <View style={styles.halfInput}>
-                  <Text style={styles.inputLabel}>Base Qty (g)</Text>
+                  <Text style={styles.inputLabel}>Porção Base (g/ml)</Text>
                   <TextInput
                     style={styles.input}
                     value={customBaseQty}
@@ -536,8 +676,8 @@ export default function FoodSearch() {
               </View>
 
               <View style={styles.rowInputs}>
-                <View style={styles.thirdInput}>
-                  <Text style={styles.inputLabel}>Protein (g)</Text>
+                <View style={styles.fourthInput}>
+                  <Text style={styles.inputLabel}>Proteína (g)</Text>
                   <TextInput
                     style={styles.input}
                     value={customProtein}
@@ -547,7 +687,7 @@ export default function FoodSearch() {
                     placeholderTextColor="#6b7280"
                   />
                 </View>
-                <View style={styles.thirdInput}>
+                <View style={styles.fourthInput}>
                   <Text style={styles.inputLabel}>Carbs (g)</Text>
                   <TextInput
                     style={styles.input}
@@ -558,8 +698,8 @@ export default function FoodSearch() {
                     placeholderTextColor="#6b7280"
                   />
                 </View>
-                <View style={styles.thirdInput}>
-                  <Text style={styles.inputLabel}>Fats (g)</Text>
+                <View style={styles.fourthInput}>
+                  <Text style={styles.inputLabel}>Gorduras (g)</Text>
                   <TextInput
                     style={styles.input}
                     value={customFats}
@@ -569,19 +709,34 @@ export default function FoodSearch() {
                     placeholderTextColor="#6b7280"
                   />
                 </View>
+                <View style={styles.fourthInput}>
+                  <Text style={styles.inputLabel}>Fibras (g)</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={customFiber}
+                    onChangeText={setCustomFiber}
+                    keyboardType="numeric"
+                    placeholder="0"
+                    placeholderTextColor="#6b7280"
+                  />
+                </View>
               </View>
 
-              <TouchableOpacity 
-                style={[styles.addButton, savingCustom && styles.addButtonDisabled]} 
+              <TouchableOpacity
+                style={[styles.addButton, savingCustom && styles.addButtonDisabled, { marginTop: 20 }]}
                 onPress={handleSaveCustomFood}
                 disabled={savingCustom}
               >
                 <Text style={styles.addButtonText}>
-                  {savingCustom ? 'Saving...' : 'Save Custom Food'}
+                  {savingCustom ? 'Salvando alimento...' : 'Salvar Alimento'}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.cancelButton} onPress={() => { resetCustomForm(); setShowCustomModal(false); }}>
-                <Text style={styles.cancelButtonText}>Cancel</Text>
+
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => { resetCustomForm(); setShowCustomModal(false); }}
+              >
+                <Text style={styles.cancelButtonText}>Cancelar</Text>
               </TouchableOpacity>
             </ScrollView>
           </View>
@@ -593,95 +748,208 @@ export default function FoodSearch() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a1a15' },
-  
-  // Search
-  searchContainer: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 12, gap: 12 },
-  searchInputWrapper: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#0f2920', borderRadius: 12, paddingHorizontal: 16, borderWidth: 1, borderColor: '#1f3d32' },
-  searchInput: { flex: 1, color: '#ffffff', paddingVertical: 14, paddingHorizontal: 10, fontSize: 15 },
-  filterButton: { backgroundColor: '#0f2920', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: '#1f3d32' },
-  
-  // Tabs
+
+  // Barra de Pesquisa
+  searchContainer: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
+  searchInputWrapper: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0f2920',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#1f3d32',
+  },
+  searchInput: { flex: 1, color: '#ffffff', paddingVertical: 12, paddingHorizontal: 10, fontSize: 14 },
+  searchSubmitBtn: {
+    backgroundColor: '#22c55e',
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  // Abas
   tabsContainer: { paddingHorizontal: 16, marginBottom: 12 },
-  tabsScroll: { gap: 10 },
-  tab: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20, backgroundColor: 'transparent', borderWidth: 1, borderColor: '#1f3d32' },
+  tabsScroll: { gap: 8 },
+  tab: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 18,
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: '#1f3d32',
+  },
   tabActive: { backgroundColor: '#22c55e', borderColor: '#22c55e' },
-  tabText: { color: '#6b7280', fontWeight: '600' },
-  tabTextActive: { color: '#0a1a15' },
-  createCustomBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, backgroundColor: '#153528', borderWidth: 1, borderColor: '#22c55e', gap: 4 },
-  createCustomText: { color: '#22c55e', fontWeight: '600' },
-  
+  tabText: { color: '#9ca3af', fontSize: 13, fontWeight: '600' },
+  tabTextActive: { color: '#0a1a15', fontWeight: '700' },
+  createCustomBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 18,
+    backgroundColor: '#153528',
+    borderWidth: 1,
+    borderColor: '#22c55e',
+    gap: 4,
+  },
+  createCustomText: { color: '#22c55e', fontSize: 13, fontWeight: '600' },
+
   // Loading
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  
-  // List
-  listContent: { paddingHorizontal: 16, paddingBottom: 100 },
-  
-  // Food Card
-  foodCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0f2920', padding: 12, borderRadius: 16, marginBottom: 12, borderWidth: 1, borderColor: '#1f3d32' },
-  foodImagePlaceholder: { width: 60, height: 60, borderRadius: 12, backgroundColor: '#153528', justifyContent: 'center', alignItems: 'center' },
-  foodEmoji: { fontSize: 28 },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
+  loadingText: { color: '#9ca3af', fontSize: 14 },
+
+  // Lista
+  listContent: { paddingHorizontal: 16, paddingBottom: 110 },
+  foodCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0f2920',
+    padding: 12,
+    borderRadius: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#1f3d32',
+  },
+  foodImagePlaceholder: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: '#153528',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  foodEmoji: { fontSize: 24 },
   foodInfo: { flex: 1, marginLeft: 12 },
-  foodName: { color: '#ffffff', fontSize: 16, fontWeight: '600' },
-  foodServing: { color: '#6b7280', fontSize: 13, marginTop: 2 },
-  foodMacros: { marginTop: 4 },
-  foodCalories: { color: '#ffffff', fontWeight: '600' },
-  foodMacroDetail: { color: '#22c55e', fontSize: 12 },
-  addFoodBtn: { padding: 8 },
-  
-  // Empty
-  emptyContainer: { alignItems: 'center', paddingTop: 60 },
-  emptyEmoji: { fontSize: 48, marginBottom: 16 },
-  emptyText: { color: '#ffffff', fontSize: 18, fontWeight: '600' },
-  emptySubtext: { color: '#6b7280', fontSize: 14, marginTop: 8 },
-  
+  foodTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  foodName: { color: '#ffffff', fontSize: 15, fontWeight: '600', flex: 1 },
+  tbcaBadge: { backgroundColor: 'rgba(34, 197, 94, 0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  tbcaBadgeText: { color: '#22c55e', fontSize: 10, fontWeight: '700' },
+  customBadge: { backgroundColor: 'rgba(56, 189, 248, 0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  customBadgeText: { color: '#38bdf8', fontSize: 10, fontWeight: '700' },
+
+  foodServing: { color: '#9ca3af', fontSize: 12, marginTop: 2 },
+  foodMacrosRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 },
+  foodCalories: { color: '#ffffff', fontSize: 12, fontWeight: '700' },
+  foodMacroP: { color: '#22c55e', fontSize: 12, fontWeight: '600' },
+  foodMacroC: { color: '#9ca3af', fontSize: 12 },
+  foodMacroF: { color: '#9ca3af', fontSize: 12 },
+  foodMacroFib: { color: '#38bdf8', fontSize: 12, fontWeight: '600' },
+  addFoodBtn: { padding: 8, backgroundColor: 'rgba(34, 197, 94, 0.1)', borderRadius: 10 },
+
+  // Vazio
+  emptyContainer: { alignItems: 'center', paddingTop: 60, paddingHorizontal: 20 },
+  emptyEmoji: { fontSize: 48, marginBottom: 14 },
+  emptyText: { color: '#ffffff', fontSize: 17, fontWeight: '600', textAlign: 'center' },
+  emptySubtext: { color: '#6b7280', fontSize: 13, marginTop: 6, textAlign: 'center', lineHeight: 18 },
+
   // Modal
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: '#0f2920', padding: 24, borderTopLeftRadius: 24, borderTopRightRadius: 24, borderTopWidth: 1, borderColor: '#1f3d32' },
-  modalHandle: { width: 40, height: 4, backgroundColor: '#1f3d32', borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 },
-  modalTitle: { color: '#ffffff', fontSize: 24, fontWeight: 'bold' },
-  modalSubtitle: { color: '#6b7280', marginTop: 4 },
-  highProtein: { color: '#22c55e' },
-  favoriteBtn: { padding: 8, backgroundColor: '#153528', borderRadius: 12, borderWidth: 1, borderColor: '#1f3d32' },
-  
-  // Macro Row
-  macroRow: { flexDirection: 'row', gap: 10, marginBottom: 24 },
-  macroBox: { flex: 1, backgroundColor: '#153528', padding: 14, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#1f3d32' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
+  modalContent: {
+    backgroundColor: '#0f2920',
+    padding: 22,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderTopWidth: 1,
+    borderColor: '#1f3d32',
+  },
+  modalHandle: { width: 40, height: 4, backgroundColor: '#1f3d32', borderRadius: 2, alignSelf: 'center', marginBottom: 14 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 },
+  modalTitle: { color: '#ffffff', fontSize: 20, fontWeight: 'bold' },
+  sourceTagRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  modalSubtitle: { color: '#9ca3af', fontSize: 13 },
+  originBadge: { backgroundColor: 'rgba(34, 197, 94, 0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  originBadgeText: { color: '#22c55e', fontSize: 11, fontWeight: '700' },
+  favoriteBtn: { padding: 10, backgroundColor: '#153528', borderRadius: 12, borderWidth: 1, borderColor: '#1f3d32' },
+
+  // Macros do Modal
+  macroRow: { flexDirection: 'row', gap: 6, marginBottom: 16 },
+  macroBox: {
+    flex: 1,
+    backgroundColor: '#153528',
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#1f3d32',
+  },
   macroBoxHighlight: { backgroundColor: '#22c55e', borderColor: '#22c55e' },
-  macroBoxValue: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' },
+  macroBoxValue: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
   macroBoxValueHighlight: { color: '#0a1a15' },
-  macroBoxLabel: { color: '#6b7280', fontSize: 11, marginTop: 2 },
+  macroBoxLabel: { color: '#9ca3af', fontSize: 10, marginTop: 2, fontWeight: '700' },
   macroBoxLabelHighlight: { color: '#0a1a15' },
-  
+
+  incompleteDataBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 16,
+  },
+  incompleteDataText: { color: '#fde68a', fontSize: 11, flex: 1 },
+
   // Slider
-  sliderSection: { marginBottom: 24 },
-  sliderHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  sliderLabel: { color: '#ffffff', fontSize: 16 },
-  sliderValue: { color: '#ffffff', fontSize: 32, fontWeight: 'bold' },
-  sliderUnit: { fontSize: 16, fontWeight: 'normal' },
-  slider: { width: '100%', height: 40 },
-  sliderRange: { flexDirection: 'row', justifyContent: 'space-between' },
-  sliderRangeText: { color: '#6b7280', fontSize: 12 },
-  
-  // Meal Selection
-  mealLabel: { color: '#ffffff', fontSize: 16, marginBottom: 12 },
-  mealButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 24 },
-  mealButton: { paddingHorizontal: 18, paddingVertical: 12, borderRadius: 24, borderWidth: 1, borderColor: '#1f3d32', backgroundColor: '#153528' },
+  sliderSection: { marginBottom: 18 },
+  sliderHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  sliderLabel: { color: '#ffffff', fontSize: 15, fontWeight: '600' },
+  sliderValue: { color: '#ffffff', fontSize: 28, fontWeight: 'bold' },
+  sliderUnit: { fontSize: 15, fontWeight: 'normal', color: '#9ca3af' },
+  slider: { width: '100%', height: 36 },
+
+  // Botões de gramagem rápida
+  quickGramsRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  quickGramBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: '#153528',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#1f3d32',
+  },
+  quickGramBtnActive: { backgroundColor: '#22c55e', borderColor: '#22c55e' },
+  quickGramText: { color: '#9ca3af', fontSize: 12, fontWeight: '600' },
+  quickGramTextActive: { color: '#0a1a15', fontWeight: '700' },
+
+  // Refeição
+  mealLabel: { color: '#ffffff', fontSize: 15, fontWeight: '600', marginBottom: 10 },
+  mealButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
+  mealButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#1f3d32',
+    backgroundColor: '#153528',
+  },
   mealButtonActive: { backgroundColor: '#22c55e', borderColor: '#22c55e' },
-  mealButtonText: { color: '#6b7280', fontWeight: '600' },
-  mealButtonTextActive: { color: '#0a1a15' },
-  
-  // Buttons
-  addButton: { backgroundColor: '#22c55e', paddingVertical: 18, borderRadius: 16, alignItems: 'center' },
+  mealButtonText: { color: '#9ca3af', fontSize: 13, fontWeight: '600' },
+  mealButtonTextActive: { color: '#0a1a15', fontWeight: '700' },
+
+  // Botões de Ação
+  addButton: { backgroundColor: '#22c55e', paddingVertical: 16, borderRadius: 14, alignItems: 'center' },
   addButtonDisabled: { opacity: 0.6 },
   addButtonText: { color: '#0a1a15', fontWeight: 'bold', fontSize: 16 },
-  cancelButton: { paddingVertical: 16, alignItems: 'center' },
-  cancelButtonText: { color: '#6b7280', fontWeight: '600' },
-  
-  // Form inputs
-  inputLabel: { color: '#9ca3af', marginBottom: 8, marginTop: 12 },
-  input: { backgroundColor: '#153528', borderRadius: 12, padding: 16, color: '#ffffff', fontSize: 16, borderWidth: 1, borderColor: '#1f3d32' },
-  rowInputs: { flexDirection: 'row', gap: 12 },
+  cancelButton: { paddingVertical: 14, alignItems: 'center' },
+  cancelButtonText: { color: '#9ca3af', fontWeight: '600', fontSize: 14 },
+
+  // Form custom
+  inputLabel: { color: '#9ca3af', marginBottom: 6, marginTop: 10, fontSize: 13 },
+  input: {
+    backgroundColor: '#153528',
+    borderRadius: 12,
+    padding: 12,
+    color: '#ffffff',
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: '#1f3d32',
+  },
+  rowInputs: { flexDirection: 'row', gap: 8 },
   halfInput: { flex: 1 },
-  thirdInput: { flex: 1 },
+  fourthInput: { flex: 1 },
 });

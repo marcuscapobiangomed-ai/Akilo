@@ -1,11 +1,9 @@
-
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, Alert, ActivityIndicator, Modal, TextInput } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, Modal, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useEffect, useState, useCallback } from 'react';
-import { useRouter } from 'expo-router';
 import Slider from '@react-native-community/slider';
 import { api } from '../../core/api';
-import { Trash2, Plus, Coffee, Sun, Moon, Utensils, X, Search, Edit3 } from 'lucide-react-native';
+import { Trash2, Plus, Coffee, Sun, Moon, Utensils, X, Search, Edit3, Repeat, Sparkles } from 'lucide-react-native';
 import { useToast } from '../../components/Toast';
 import { HistorySkeleton } from '../../components/SkeletonLoader';
 import { dataEvents } from '../../core/dataEvents';
@@ -20,7 +18,10 @@ interface FoodLog {
   protein_g: number;
   carbs_g: number;
   fats_g: number;
+  fiber_g?: number;
+  sodium_mg?: number;
   qty: number;
+  unit_type?: string;
   meal_type: MealType;
   date: string;
   created_at: string;
@@ -34,9 +35,17 @@ interface FoodItem {
   protein_per_base: number;
   carbs_per_base: number;
   fats_per_base: number;
+  fiber_per_base?: number;
   unit_type: string;
   base_qty: number;
 }
+
+const mealLabels: Record<MealType, string> = {
+  breakfast: 'Café da Manhã',
+  lunch: 'Almoço',
+  snacks: 'Lanches',
+  dinner: 'Jantar',
+};
 
 const mealIcons: Record<MealType, any> = {
   breakfast: Coffee,
@@ -52,22 +61,14 @@ const mealColors: Record<MealType, string> = {
   dinner: '#3b82f6',
 };
 
-const getSliderConfig = (unitType: string) => {
-  if (unitType === 'serving') {
-    return { min: 0, max: 20, step: 1, unit: 'serving' };
-  }
-  return { min: 0, max: 500, step: 5, unit: unitType };
-};
-
 export default function History() {
-  const router = useRouter();
   const [logs, setLogs] = useState<FoodLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const { showToast } = useToast();
-  
-  // Add food modal
+
+  // Modal de adicionar
   const [showAddModal, setShowAddModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<FoodItem[]>([]);
@@ -76,29 +77,28 @@ export default function History() {
   const [selectedFood, setSelectedFood] = useState<FoodItem | null>(null);
   const [qty, setQty] = useState(100);
   const [addingFood, setAddingFood] = useState(false);
-  
-  // Delete confirmation modal
+
+  // Modal de exclusão
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<{ id: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // Edit modal
+  // Modal de edição
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingLog, setEditingLog] = useState<FoodLog | null>(null);
   const [editQuantity, setEditQuantity] = useState('');
   const [editMeal, setEditMeal] = useState<MealType>('breakfast');
   const [updating, setUpdating] = useState(false);
 
+  // Repetir refeição
+  const [repeatingMeal, setRepeatingMeal] = useState<string | null>(null);
+
   const fetchLogs = async () => {
     try {
       const res = await api.get('/api/food/log', { date: selectedDate });
-      if (res && Array.isArray(res)) {
-        setLogs(res);
-      } else {
-        setLogs([]);
-      }
+      setLogs(Array.isArray(res) ? res : []);
     } catch (e) {
-      console.error('Error fetching food logs:', e);
+      console.error('Erro ao buscar diário alimentar:', e);
       setLogs([]);
     } finally {
       setLoading(false);
@@ -116,13 +116,41 @@ export default function History() {
     fetchLogs();
   }, [selectedDate]);
 
-  // Auto-refresh on data changes
   useEffect(() => {
     const unsub1 = dataEvents.on('food_logged', fetchLogs);
     const unsub2 = dataEvents.on('food_deleted', fetchLogs);
     const unsub3 = dataEvents.on('food_edited', fetchLogs);
-    return () => { unsub1(); unsub2(); unsub3(); };
+    return () => {
+      unsub1(); unsub2(); unsub3();
+    };
   }, [selectedDate]);
+
+  // AÇÃO ANTI-ATRITO: Repetir Refeição de Ontem em 1 Toque
+  const handleRepeatMeal = async (mealType: MealType) => {
+    const curr = new Date(selectedDate);
+    curr.setDate(curr.getDate() - 1);
+    const sourceDate = curr.toISOString().split('T')[0];
+
+    setRepeatingMeal(mealType);
+    try {
+      const res = await api.post('/api/food/repeat-meal', {
+        sourceDate,
+        targetDate: selectedDate,
+        mealType,
+      });
+
+      if (res?.cloned > 0) {
+        showToast(`+${res.cloned} itens repetidos de ontem no ${mealLabels[mealType]}!`, 'success');
+        fetchLogs();
+      } else {
+        showToast(`Nenhum item encontrado no ${mealLabels[mealType]} de ontem.`, 'error');
+      }
+    } catch (e: any) {
+      showToast('Erro ao repetir refeição', 'error');
+    } finally {
+      setRepeatingMeal(null);
+    }
+  };
 
   const handleDelete = (id: string, foodName: string) => {
     setItemToDelete({ id, name: foodName });
@@ -131,18 +159,15 @@ export default function History() {
 
   const confirmDelete = async () => {
     if (!itemToDelete) return;
-    
     setDeleting(true);
     try {
-      console.log('Deleting food log:', itemToDelete.id);
       await api.delete(`/api/food/log/${itemToDelete.id}`);
-      setLogs(prev => prev.filter(log => log.id !== itemToDelete.id));
-      showToast('Entry deleted', 'success');
+      setLogs((prev) => prev.filter((log) => log.id !== itemToDelete.id));
+      showToast('Item removido com sucesso', 'success');
       setShowDeleteModal(false);
       setItemToDelete(null);
     } catch (e: any) {
-      console.error('Delete error:', e);
-      showToast(e?.message || 'Failed to delete', 'error');
+      showToast('Falha ao remover item', 'error');
     } finally {
       setDeleting(false);
     }
@@ -157,76 +182,70 @@ export default function History() {
 
   const confirmEdit = async () => {
     if (!editingLog) return;
-    
     setUpdating(true);
     try {
-      const newQty = parseFloat(editQuantity) || 100;
+      const newQty = parseFloat(editQuantity.replace(',', '.')) || 100;
       const oldQty = editingLog.qty || 100;
       const multiplier = newQty / oldQty;
-      
+
       const updatedData = {
         food_name: editingLog.food_name,
-        food_source: (editingLog as any).food_source || 'master',
-        food_master_id: (editingLog as any).food_master_id || null,
-        food_custom_id: (editingLog as any).food_custom_id || null,
         calories: Math.round(editingLog.calories * multiplier),
         protein_g: Math.round(editingLog.protein_g * multiplier * 10) / 10,
         carbs_g: Math.round(editingLog.carbs_g * multiplier * 10) / 10,
         fats_g: Math.round(editingLog.fats_g * multiplier * 10) / 10,
+        fiber_g: Math.round((editingLog.fiber_g || 0) * multiplier * 10) / 10,
         qty: newQty,
         meal_type: editMeal,
         date: editingLog.date,
       };
-      
+
       await api.put(`/api/food/log/${editingLog.id}`, updatedData);
-      
-      // Update local state
-      setLogs(prev => prev.map(log => 
-        log.id === editingLog.id 
-          ? { ...log, ...updatedData, qty: newQty, meal_type: editMeal }
-          : log
-      ));
-      
-      showToast('Entry updated', 'success');
+      setLogs((prev) =>
+        prev.map((log) => (log.id === editingLog.id ? { ...log, ...updatedData } : log))
+      );
+
+      showToast('Item atualizado', 'success');
       setShowEditModal(false);
       setEditingLog(null);
     } catch (e: any) {
-      console.error('Update error:', e);
-      showToast(e?.message || 'Failed to update', 'error');
+      showToast('Falha ao atualizar item', 'error');
     } finally {
       setUpdating(false);
     }
   };
 
-  // Search foods — local DB first, API fallback
+  // Busca rápida (Local primeiro, Supabase TBCA depois)
   const handleSearch = async (query: string) => {
     setSearchQuery(query);
     if (query.length < 2) {
       setSearchResults([]);
       return;
     }
-    
+
     setSearching(true);
     try {
-      // Try local DB first (works offline)
       const localResults = await searchFoodsLocal(query);
       if (localResults.length > 0) {
-        setSearchResults(localResults.map(f => ({
-          id: f.id,
-          name: f.name,
-          source: f.source,
-          calories_per_base: f.calories,
-          protein_per_base: f.protein_g,
-          carbs_per_base: f.carbs_g,
-          fats_per_base: f.fats_g,
-          unit_type: f.unit_type,
-          base_qty: f.base_qty,
-        })));
+        setSearchResults(
+          localResults.map((f) => ({
+            id: f.id,
+            name: f.name,
+            source: f.source,
+            calories_per_base: f.calories,
+            protein_per_base: f.protein_g,
+            carbs_per_base: f.carbs_g,
+            fats_per_base: f.fats_g,
+            fiber_per_base: f.fiber_g,
+            unit_type: f.unit_type,
+            base_qty: f.base_qty,
+          }))
+        );
         setSearching(false);
         return;
       }
 
-      // Fallback to API
+      // Consulta Supabase com Trigram em PT-BR
       const res = await api.get('/api/food/search', { q: query });
       const mapFood = (food: any, source: 'master' | 'custom'): FoodItem => ({
         id: food.id,
@@ -236,39 +255,37 @@ export default function History() {
         protein_per_base: food.protein_g || 0,
         carbs_per_base: food.carbs_g || 0,
         fats_per_base: food.fats_g || 0,
+        fiber_per_base: food.fiber_g || 0,
         unit_type: food.unit_type || 'g',
         base_qty: food.base_qty || 100,
       });
-      
+
       const masterFoods = (res.master || []).map((f: any) => mapFood(f, 'master'));
       const customFoods = (res.custom || []).map((f: any) => mapFood(f, 'custom'));
       setSearchResults([...masterFoods, ...customFoods]);
     } catch (e) {
-      console.error('Search error:', e);
+      console.error('Erro na busca:', e);
     } finally {
       setSearching(false);
     }
   };
 
-  // Calculate preview macros for selected food
   const calcPreviewMacros = (food: FoodItem, currentQty: number) => {
-    const factor = currentQty / food.base_qty;
+    const factor = currentQty / (food.base_qty || 100);
     return {
       calories: Math.round(food.calories_per_base * factor),
       protein: Math.round(food.protein_per_base * factor * 10) / 10,
       carbs: Math.round(food.carbs_per_base * factor * 10) / 10,
       fats: Math.round(food.fats_per_base * factor * 10) / 10,
+      fiber: Math.round((food.fiber_per_base || 0) * factor * 10) / 10,
     };
   };
 
-  // Add food to selected date
   const handleAddFood = async () => {
     if (!selectedFood) return;
-    
     setAddingFood(true);
     try {
       const macros = calcPreviewMacros(selectedFood, qty);
-      
       await api.post('/api/food/log', {
         food_name: selectedFood.name,
         food_source: selectedFood.source || 'master',
@@ -278,12 +295,14 @@ export default function History() {
         protein_g: macros.protein,
         carbs_g: macros.carbs,
         fats_g: macros.fats,
+        fiber_g: macros.fiber,
         qty: qty,
+        unit_type: selectedFood.unit_type || 'g',
         meal_type: selectedMeal,
         date: selectedDate,
       });
-      
-      showToast('Food added successfully', 'success');
+
+      showToast('Alimento adicionado!', 'success');
       setShowAddModal(false);
       setSelectedFood(null);
       setSearchQuery('');
@@ -291,14 +310,12 @@ export default function History() {
       setQty(100);
       fetchLogs();
     } catch (e) {
-      console.error('Add food error:', e);
-      showToast('Failed to add food', 'error');
+      showToast('Erro ao adicionar alimento', 'error');
     } finally {
       setAddingFood(false);
     }
   };
 
-  // Group logs by meal type
   const groupedLogs = logs.reduce((acc, log) => {
     const mealType = log.meal_type || 'snacks';
     if (!acc[mealType]) acc[mealType] = [];
@@ -306,24 +323,24 @@ export default function History() {
     return acc;
   }, {} as Record<MealType, FoodLog[]>);
 
-  // Get dates for the week (use local dates, not UTC)
+  // Seletor semanal em Português
   const getDates = () => {
     const dates = [];
     const today = new Date();
-    today.setHours(0, 0, 0, 0); // Reset time to midnight
-    
+    today.setHours(0, 0, 0, 0);
+
+    const weekDaysPt = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
     for (let i = 6; i >= 0; i--) {
       const date = new Date(today);
       date.setDate(today.getDate() - i);
-      
-      // Format date manually to avoid timezone issues
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, '0');
       const day = String(date.getDate()).padStart(2, '0');
-      
+
       dates.push({
         date: `${year}-${month}-${day}`,
-        day: date.toLocaleDateString('en', { weekday: 'short' }),
+        day: weekDaysPt[date.getDay()],
         dayNum: date.getDate(),
         isToday: i === 0,
       });
@@ -333,18 +350,16 @@ export default function History() {
 
   const dates = getDates();
 
-  // Calculate totals
   const totalCalories = logs.reduce((sum, log) => sum + (log.calories || 0), 0);
   const totalProtein = logs.reduce((sum, log) => sum + (log.protein_g || 0), 0);
   const totalCarbs = logs.reduce((sum, log) => sum + (log.carbs_g || 0), 0);
   const totalFats = logs.reduce((sum, log) => sum + (log.fats_g || 0), 0);
+  const totalFiber = logs.reduce((sum, log) => sum + (log.fiber_g || 0), 0);
 
-  // Format selected date for display
   const formatDate = (dateStr: string) => {
-    // Parse date manually to avoid timezone issues
     const [year, month, day] = dateStr.split('-').map(Number);
     const date = new Date(year, month - 1, day);
-    return date.toLocaleDateString('en', { weekday: 'long', month: 'short', day: 'numeric' });
+    return date.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'short' });
   };
 
   if (loading) {
@@ -355,28 +370,27 @@ export default function History() {
     );
   }
 
+  const allMeals: MealType[] = ['breakfast', 'lunch', 'snacks', 'dinner'];
+
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView 
+      <ScrollView
         contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#22c55e" />}
         showsVerticalScrollIndicator={false}
       >
-        {/* Header */}
+        {/* Cabeçalho */}
         <View style={styles.header}>
           <View>
-            <Text style={styles.headerTitle}>Food Log</Text>
+            <Text style={styles.headerTitle}>Diário de Refeições</Text>
             <Text style={styles.headerSubtitle}>{formatDate(selectedDate)}</Text>
           </View>
-          <TouchableOpacity 
-            style={styles.addButton}
-            onPress={() => setShowAddModal(true)}
-          >
+          <TouchableOpacity style={styles.addButton} onPress={() => setShowAddModal(true)}>
             <Plus color="#0a1a15" size={22} />
           </TouchableOpacity>
         </View>
 
-        {/* Date Selector */}
+        {/* Seletor de Data */}
         <View style={styles.dateSelector}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {dates.map((d) => (
@@ -385,332 +399,257 @@ export default function History() {
                 style={[styles.dateItem, selectedDate === d.date && styles.dateItemActive]}
                 onPress={() => setSelectedDate(d.date)}
               >
-                <Text style={[styles.dateDay, selectedDate === d.date && styles.dateDayActive]}>
-                  {d.day}
-                </Text>
-                <Text style={[styles.dateNum, selectedDate === d.date && styles.dateNumActive]}>
-                  {d.dayNum}
-                </Text>
+                <Text style={[styles.dateDay, selectedDate === d.date && styles.dateDayActive]}>{d.day}</Text>
+                <Text style={[styles.dateNum, selectedDate === d.date && styles.dateNumActive]}>{d.dayNum}</Text>
                 {d.isToday && <View style={[styles.todayDot, selectedDate === d.date && styles.todayDotActive]} />}
               </TouchableOpacity>
             ))}
           </ScrollView>
         </View>
 
-        {/* Summary Card */}
+        {/* Card de Resumo (Com Fibras) */}
         <View style={styles.summaryCard}>
           <View style={styles.summaryItem}>
             <Text style={styles.summaryValue}>{Math.round(totalCalories)}</Text>
-            <Text style={styles.summaryLabel}>Calories</Text>
+            <Text style={styles.summaryLabel}>Calorias</Text>
           </View>
           <View style={styles.summaryDivider} />
           <View style={styles.summaryItem}>
             <Text style={[styles.summaryValue, { color: '#3b82f6' }]}>{Math.round(totalProtein)}g</Text>
-            <Text style={styles.summaryLabel}>Protein</Text>
+            <Text style={styles.summaryLabel}>Proteína</Text>
           </View>
           <View style={styles.summaryDivider} />
           <View style={styles.summaryItem}>
-            <Text style={styles.summaryValue}>{Math.round(totalCarbs)}g</Text>
-            <Text style={styles.summaryLabel}>Carbs</Text>
+            <Text style={[styles.summaryValue, { color: '#22c55e' }]}>{Math.round(totalCarbs)}g</Text>
+            <Text style={styles.summaryLabel}>Carbos</Text>
           </View>
           <View style={styles.summaryDivider} />
           <View style={styles.summaryItem}>
-            <Text style={styles.summaryValue}>{Math.round(totalFats)}g</Text>
-            <Text style={styles.summaryLabel}>Fats</Text>
+            <Text style={[styles.summaryValue, { color: '#f97316' }]}>{Math.round(totalFats)}g</Text>
+            <Text style={styles.summaryLabel}>Gorduras</Text>
+          </View>
+          <View style={styles.summaryDivider} />
+          <View style={styles.summaryItem}>
+            <Text style={[styles.summaryValue, { color: '#eab308' }]}>{Math.round(totalFiber)}g</Text>
+            <Text style={styles.summaryLabel}>Fibras</Text>
           </View>
         </View>
 
-        {/* Food Logs by Meal */}
-        {logs.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Utensils color="#4b5563" size={48} />
-            <Text style={styles.emptyTitle}>No entries for this day</Text>
-            <Text style={styles.emptySubtitle}>Tap + to add food items</Text>
-            <TouchableOpacity 
-              style={styles.emptyAddButton}
-              onPress={() => setShowAddModal(true)}
-            >
-              <Plus color="#0a1a15" size={18} />
-              <Text style={styles.emptyAddText}>Add Food</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          Object.entries(groupedLogs).map(([mealType, mealLogs]) => {
-            const MealIcon = mealIcons[mealType as MealType];
-            const mealColor = mealColors[mealType as MealType];
-            const mealCalories = mealLogs.reduce((sum, log) => sum + (log.calories || 0), 0);
+        {/* Seções por Refeição */}
+        {allMeals.map((mealType) => {
+          const mealLogs = groupedLogs[mealType] || [];
+          const MealIcon = mealIcons[mealType];
+          const mealColor = mealColors[mealType];
+          const mealCalories = mealLogs.reduce((sum, log) => sum + (log.calories || 0), 0);
+          const isRepeating = repeatingMeal === mealType;
 
-            return (
-              <View key={mealType} style={styles.mealSection}>
-                <View style={styles.mealHeader}>
+          return (
+            <View key={mealType} style={styles.mealSection}>
+              <View style={styles.mealHeader}>
+                <View style={styles.mealHeaderLeft}>
                   <View style={[styles.mealIconWrapper, { backgroundColor: `${mealColor}20` }]}>
                     <MealIcon color={mealColor} size={18} />
                   </View>
-                  <Text style={styles.mealTitle}>
-                    {mealType.charAt(0).toUpperCase() + mealType.slice(1)}
-                  </Text>
-                  <Text style={styles.mealCalories}>{Math.round(mealCalories)} kcal</Text>
+                  <Text style={styles.mealTitle}>{mealLabels[mealType]}</Text>
+                  <Text style={styles.mealCaloriesBadge}>{Math.round(mealCalories)} kcal</Text>
                 </View>
 
-                {mealLogs.map((log) => (
-                  <View key={log.id} style={styles.logItem}>
-                    <View style={styles.logInfo}>
-                      <Text style={styles.logName} numberOfLines={1}>{log.food_name}</Text>
-                      <Text style={styles.logMacros}>
-                        {Math.round(log.calories)} kcal • {Math.round(log.protein_g || 0)}g P • {Math.round(log.carbs_g || 0)}g C • {Math.round(log.fats_g || 0)}g F
-                      </Text>
-                    </View>
-                    <View style={styles.logActions}>
-                      <TouchableOpacity 
-                        style={styles.editButton}
-                        onPress={() => handleEdit(log)}
-                      >
-                        <Edit3 color="#22c55e" size={18} />
-                      </TouchableOpacity>
-                      <TouchableOpacity 
-                        style={styles.deleteButton}
-                        onPress={() => handleDelete(log.id, log.food_name)}
-                      >
-                        <Trash2 color="#ef4444" size={18} />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ))}
+                {/* BOTÃO ANTI-ATRITO: Repetir Refeição */}
+                <View style={styles.mealHeaderActions}>
+                  <TouchableOpacity
+                    style={styles.repeatButton}
+                    disabled={isRepeating}
+                    onPress={() => handleRepeatMeal(mealType)}
+                  >
+                    <Repeat color="#22c55e" size={13} />
+                    <Text style={styles.repeatButtonText}>{isRepeating ? '...' : 'Repetir'}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.addMealButton}
+                    onPress={() => {
+                      setSelectedMeal(mealType);
+                      setShowAddModal(true);
+                    }}
+                  >
+                    <Plus color="#9ca3af" size={16} />
+                  </TouchableOpacity>
+                </View>
               </View>
-            );
-          })
-        )}
+
+              {mealLogs.length === 0 ? (
+                <View style={styles.emptyMealBox}>
+                  <Text style={styles.emptyMealText}>Nenhum item registrado</Text>
+                </View>
+              ) : (
+                <View style={styles.foodList}>
+                  {mealLogs.map((log) => (
+                    <View key={log.id} style={styles.foodItem}>
+                      <View style={styles.foodInfo}>
+                        <Text style={styles.foodName}>{log.food_name}</Text>
+                        <Text style={styles.foodDetails}>
+                          {log.qty}{log.unit_type || 'g'} • {Math.round(log.calories)} kcal • P: {Math.round(log.protein_g)}g • C: {Math.round(log.carbs_g)}g • G: {Math.round(log.fats_g)}g
+                          {log.fiber_g ? ` • Fib: ${log.fiber_g}g` : ''}
+                        </Text>
+                      </View>
+                      <View style={styles.foodActions}>
+                        <TouchableOpacity style={styles.actionBtn} onPress={() => handleEdit(log)}>
+                          <Edit3 color="#9ca3af" size={16} />
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.actionBtn} onPress={() => handleDelete(log.id, log.food_name)}>
+                          <Trash2 color="#ef4444" size={16} />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+          );
+        })}
       </ScrollView>
 
-      {/* Add Food Modal */}
+      {/* Modal Adicionar Alimento */}
       <Modal visible={showAddModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add Food</Text>
-              <Text style={styles.modalSubtitle}>{formatDate(selectedDate)}</Text>
-              <TouchableOpacity style={styles.modalClose} onPress={() => {
-                setShowAddModal(false);
-                setSelectedFood(null);
-                setSearchQuery('');
-                setSearchResults([]);
-              }}>
+              <Text style={styles.modalTitle}>Adicionar ao {mealLabels[selectedMeal]}</Text>
+              <TouchableOpacity onPress={() => setShowAddModal(false)}>
                 <X color="#6b7280" size={24} />
               </TouchableOpacity>
             </View>
 
-            {/* Meal Type Selector */}
-            <View style={styles.mealSelector}>
-              {(['breakfast', 'lunch', 'snacks', 'dinner'] as MealType[]).map((meal) => {
-                const Icon = mealIcons[meal];
-                const color = mealColors[meal];
-                return (
-                  <TouchableOpacity
-                    key={meal}
-                    style={[styles.mealOption, selectedMeal === meal && { backgroundColor: `${color}20`, borderColor: color }]}
-                    onPress={() => setSelectedMeal(meal)}
-                  >
-                    <Icon color={selectedMeal === meal ? color : '#6b7280'} size={18} />
-                    <Text style={[styles.mealOptionText, selectedMeal === meal && { color }]}>
-                      {meal.charAt(0).toUpperCase() + meal.slice(1)}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            {/* Search */}
-            <View style={styles.searchContainer}>
-              <Search color="#6b7280" size={20} />
+            {/* Campo de Busca na TBCA */}
+            <View style={styles.searchBox}>
+              <Search color="#6b7280" size={18} />
               <TextInput
                 style={styles.searchInput}
-                placeholder="Search foods..."
+                placeholder="Buscar arroz, feijão, frango, frutas..."
                 placeholderTextColor="#6b7280"
                 value={searchQuery}
                 onChangeText={handleSearch}
               />
             </View>
 
-            {/* Search Results */}
-            <ScrollView style={styles.searchResults}>
-              {searching && <ActivityIndicator color="#22c55e" style={{ marginTop: 20 }} />}
-              {searchResults.map((food) => (
-                <TouchableOpacity
-                  key={food.id}
-                  style={[styles.searchItem, selectedFood?.id === food.id && styles.searchItemSelected]}
-                  onPress={() => { setSelectedFood(food); setQty(food.base_qty); }}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.searchItemName}>{food.name}</Text>
-                    <Text style={styles.searchItemMeta}>
-                      {food.base_qty}{food.unit_type} • {food.protein_per_base}g P  {food.carbs_per_base}g C  {food.fats_per_base}g F
-                    </Text>
-                  </View>
-                  <Text style={styles.searchItemCal}>{food.calories_per_base} kcal</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+            {/* Resultados */}
+            {selectedFood ? (
+              <View style={styles.selectedFoodCard}>
+                <View style={styles.selectedFoodHeader}>
+                  <Text style={styles.selectedFoodName}>{selectedFood.name}</Text>
+                  <TouchableOpacity onPress={() => setSelectedFood(null)}>
+                    <X color="#9ca3af" size={18} />
+                  </TouchableOpacity>
+                </View>
 
-            {/* Quantity Slider & Macro Preview */}
-            {selectedFood && (() => {
-              const sliderCfg = getSliderConfig(selectedFood.unit_type);
-              const preview = calcPreviewMacros(selectedFood, qty);
-              return (
-                <View style={styles.addSection}>
-                  {/* Macro Preview */}
-                  <View style={styles.macroPreviewRow}>
-                    <View style={styles.macroPreviewItem}>
-                      <Text style={styles.macroPreviewValue}>{preview.calories}</Text>
-                      <Text style={styles.macroPreviewLabel}>KCAL</Text>
-                    </View>
-                    <View style={[styles.macroPreviewItem, styles.macroPreviewHighlight]}>
-                      <Text style={[styles.macroPreviewValue, { color: '#0a1a15' }]}>{preview.protein}g</Text>
-                      <Text style={[styles.macroPreviewLabel, { color: '#0a1a15' }]}>PROT</Text>
-                    </View>
-                    <View style={styles.macroPreviewItem}>
-                      <Text style={styles.macroPreviewValue}>{preview.carbs}g</Text>
-                      <Text style={styles.macroPreviewLabel}>CARB</Text>
-                    </View>
-                    <View style={styles.macroPreviewItem}>
-                      <Text style={styles.macroPreviewValue}>{preview.fats}g</Text>
-                      <Text style={styles.macroPreviewLabel}>FAT</Text>
-                    </View>
-                  </View>
-
-                  {/* Slider */}
+                <View style={styles.portionSliderBox}>
                   <View style={styles.sliderHeader}>
-                    <Text style={styles.sliderLabel}>Quantity</Text>
-                    <Text style={styles.sliderValue}>{qty}<Text style={styles.sliderUnit}>{sliderCfg.unit === 'serving' ? ` serving${qty !== 1 ? 's' : ''}` : sliderCfg.unit}</Text></Text>
+                    <Text style={styles.sliderLabel}>Quantidade</Text>
+                    <Text style={styles.sliderVal}>{qty}g</Text>
                   </View>
                   <Slider
-                    style={styles.slider}
-                    minimumValue={sliderCfg.min}
-                    maximumValue={sliderCfg.max}
-                    step={sliderCfg.step}
+                    minimumValue={10}
+                    maximumValue={500}
+                    step={5}
                     value={qty}
                     onValueChange={setQty}
                     minimumTrackTintColor="#22c55e"
                     maximumTrackTintColor="#1f3d32"
                     thumbTintColor="#22c55e"
                   />
-                  <View style={styles.sliderRange}>
-                    <Text style={styles.sliderRangeText}>0{sliderCfg.unit !== 'serving' ? sliderCfg.unit : ''}</Text>
-                    <Text style={styles.sliderRangeText}>{sliderCfg.max / 2}{sliderCfg.unit !== 'serving' ? sliderCfg.unit : ''}</Text>
-                    <Text style={styles.sliderRangeText}>{sliderCfg.max}{sliderCfg.unit !== 'serving' ? sliderCfg.unit : ''}</Text>
-                  </View>
-
-                  <TouchableOpacity 
-                    style={[styles.confirmButton, { marginTop: 16 }]}
-                    onPress={handleAddFood}
-                    disabled={addingFood}
-                  >
-                    {addingFood ? (
-                      <ActivityIndicator color="#0a1a15" />
-                    ) : (
-                      <Text style={styles.confirmButtonText}>Add {selectedFood.name}</Text>
-                    )}
-                  </TouchableOpacity>
                 </View>
-              );
-            })()}
+
+                {(() => {
+                  const m = calcPreviewMacros(selectedFood, qty);
+                  return (
+                    <View style={styles.previewMacrosRow}>
+                      <View style={styles.previewMacro}>
+                        <Text style={styles.previewMacroVal}>{m.calories}</Text>
+                        <Text style={styles.previewMacroLbl}>Kcal</Text>
+                      </View>
+                      <View style={styles.previewMacro}>
+                        <Text style={[styles.previewMacroVal, { color: '#3b82f6' }]}>{m.protein}g</Text>
+                        <Text style={styles.previewMacroLbl}>Proteína</Text>
+                      </View>
+                      <View style={styles.previewMacro}>
+                        <Text style={[styles.previewMacroVal, { color: '#22c55e' }]}>{m.carbs}g</Text>
+                        <Text style={styles.previewMacroLbl}>Carbos</Text>
+                      </View>
+                      <View style={styles.previewMacro}>
+                        <Text style={[styles.previewMacroVal, { color: '#f97316' }]}>{m.fats}g</Text>
+                        <Text style={styles.previewMacroLbl}>Gordura</Text>
+                      </View>
+                      <View style={styles.previewMacro}>
+                        <Text style={[styles.previewMacroVal, { color: '#eab308' }]}>{m.fiber}g</Text>
+                        <Text style={styles.previewMacroLbl}>Fibras</Text>
+                      </View>
+                    </View>
+                  );
+                })()}
+
+                <TouchableOpacity style={styles.primaryButton} disabled={addingFood} onPress={handleAddFood}>
+                  <Text style={styles.primaryButtonText}>{addingFood ? 'Salvando...' : 'Adicionar Refeição'}</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <ScrollView style={styles.searchResultsList}>
+                {searchResults.map((f) => (
+                  <TouchableOpacity key={f.id} style={styles.searchItem} onPress={() => setSelectedFood(f)}>
+                    <View style={styles.searchItemLeft}>
+                      <Text style={styles.searchItemName} numberOfLines={2}>{f.name}</Text>
+                      <Text style={styles.searchItemDetails}>
+                        {Math.round(f.calories_per_base)} kcal por 100g • P: {Math.round(f.protein_per_base)}g • C: {Math.round(f.carbs_per_base)}g • Fibras: {Math.round(f.fiber_per_base || 0)}g
+                      </Text>
+                    </View>
+                    <Plus color="#22c55e" size={20} />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
           </View>
         </View>
       </Modal>
 
-      {/* Delete Confirmation Modal */}
-      <Modal visible={showDeleteModal} animationType="fade" transparent>
-        <View style={styles.deleteModalOverlay}>
-          <View style={styles.deleteModalContent}>
-            <Text style={styles.deleteModalTitle}>Delete Entry?</Text>
-            <Text style={styles.deleteModalText}>
-              Are you sure you want to delete "{itemToDelete?.name}"?
-            </Text>
-            <View style={styles.deleteModalButtons}>
-              <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={() => {
-                  setShowDeleteModal(false);
-                  setItemToDelete(null);
-                }}
-                disabled={deleting}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
+      {/* Modal Deletar */}
+      <Modal visible={showDeleteModal} transparent animationType="fade">
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.confirmBox}>
+            <Text style={styles.confirmTitle}>Remover Alimento?</Text>
+            <Text style={styles.confirmSubtitle}>Deseja remover "{itemToDelete?.name}" do seu diário?</Text>
+            <View style={styles.confirmActions}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowDeleteModal(false)}>
+                <Text style={styles.cancelBtnText}>Cancelar</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.deleteConfirmButton}
-                onPress={confirmDelete}
-                disabled={deleting}
-              >
-                {deleting ? (
-                  <ActivityIndicator color="#ffffff" size="small" />
-                ) : (
-                  <Text style={styles.deleteButtonText}>Delete</Text>
-                )}
+              <TouchableOpacity style={styles.deleteBtn} disabled={deleting} onPress={confirmDelete}>
+                <Text style={styles.deleteBtnText}>{deleting ? 'Removendo...' : 'Remover'}</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Edit Modal */}
-      <Modal visible={showEditModal} animationType="slide" transparent>
+      {/* Modal Editar */}
+      <Modal visible={showEditModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Edit Entry</Text>
-              <Text style={styles.modalSubtitle}>{editingLog?.food_name}</Text>
-              <TouchableOpacity style={styles.modalClose} onPress={() => {
-                setShowEditModal(false);
-                setEditingLog(null);
-              }}>
+              <Text style={styles.modalTitle}>Editar Porção</Text>
+              <TouchableOpacity onPress={() => setShowEditModal(false)}>
                 <X color="#6b7280" size={24} />
               </TouchableOpacity>
             </View>
 
-            {/* Meal Type Selector */}
-            <View style={styles.mealSelector}>
-              {(['breakfast', 'lunch', 'snacks', 'dinner'] as MealType[]).map((meal) => {
-                const Icon = mealIcons[meal];
-                const color = mealColors[meal];
-                return (
-                  <TouchableOpacity
-                    key={meal}
-                    style={[styles.mealOption, editMeal === meal && { backgroundColor: `${color}20`, borderColor: color }]}
-                    onPress={() => setEditMeal(meal)}
-                  >
-                    <Icon color={editMeal === meal ? color : '#6b7280'} size={18} />
-                    <Text style={[styles.mealOptionText, editMeal === meal && { color }]}>
-                      {meal.charAt(0).toUpperCase() + meal.slice(1)}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+            <Text style={styles.inputLabel}>{editingLog?.food_name}</Text>
+            <Text style={styles.inputLabel}>Quantidade ({editingLog?.unit_type || 'g'})</Text>
+            <TextInput
+              style={styles.input}
+              value={editQuantity}
+              onChangeText={setEditQuantity}
+              keyboardType="numeric"
+            />
 
-            {/* Quantity Input */}
-            <View style={styles.editSection}>
-              <View style={styles.quantityRow}>
-                <Text style={styles.quantityLabel}>Quantity (g):</Text>
-                <TextInput
-                  style={styles.quantityInput}
-                  value={editQuantity}
-                  onChangeText={setEditQuantity}
-                  keyboardType="numeric"
-                />
-              </View>
-              
-              <TouchableOpacity 
-                style={styles.confirmButton}
-                onPress={confirmEdit}
-                disabled={updating}
-              >
-                {updating ? (
-                  <ActivityIndicator color="#0a1a15" />
-                ) : (
-                  <Text style={styles.confirmButtonText}>Update Entry</Text>
-                )}
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity style={styles.primaryButton} disabled={updating} onPress={confirmEdit}>
+              <Text style={styles.primaryButtonText}>{updating ? 'Salvando...' : 'Salvar Alteração'}</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -720,162 +659,123 @@ export default function History() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a1a15' },
-  scrollContent: { padding: 20, paddingBottom: 120 },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  scrollContent: { padding: 18, paddingBottom: 110 },
 
-  // Header
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  headerTitle: { color: '#ffffff', fontSize: 28, fontWeight: 'bold' },
-  headerSubtitle: { color: '#6b7280', fontSize: 14, marginTop: 2 },
-  addButton: { 
-    width: 44, height: 44, borderRadius: 14, backgroundColor: '#22c55e', 
-    justifyContent: 'center', alignItems: 'center' 
-  },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 },
+  headerTitle: { color: '#ffffff', fontSize: 22, fontWeight: 'bold' },
+  headerSubtitle: { color: '#9ca3af', fontSize: 13, textTransform: 'capitalize' },
+  addButton: { backgroundColor: '#22c55e', width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
 
-  // Date Selector
-  dateSelector: { marginBottom: 20 },
-  dateItem: { 
-    alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, marginRight: 8, 
-    borderRadius: 16, backgroundColor: '#0f2920', minWidth: 52,
+  // Seletor de Data
+  dateSelector: { marginBottom: 16 },
+  dateItem: {
+    backgroundColor: '#0f2920',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    marginRight: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#1f3d32',
+    minWidth: 54,
   },
-  dateItemActive: { backgroundColor: '#22c55e' },
-  dateDay: { color: '#6b7280', fontSize: 11, fontWeight: '500' },
-  dateDayActive: { color: '#0a1a15' },
-  dateNum: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginTop: 4 },
+  dateItemActive: { backgroundColor: '#22c55e', borderColor: '#22c55e' },
+  dateDay: { color: '#9ca3af', fontSize: 11, fontWeight: '500' },
+  dateDayActive: { color: '#0a1a15', fontWeight: 'bold' },
+  dateNum: { color: '#ffffff', fontSize: 16, fontWeight: 'bold', marginTop: 2 },
   dateNumActive: { color: '#0a1a15' },
   todayDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#22c55e', marginTop: 4 },
   todayDotActive: { backgroundColor: '#0a1a15' },
 
-  // Summary
-  summaryCard: { 
-    flexDirection: 'row', backgroundColor: '#0f2920', borderRadius: 20, padding: 20, marginBottom: 24,
-    borderWidth: 1, borderColor: 'rgba(34, 197, 94, 0.2)',
+  // Summary Card (5 Métricas)
+  summaryCard: {
+    backgroundColor: '#0f2920',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#1f3d32',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   summaryItem: { flex: 1, alignItems: 'center' },
-  summaryValue: { color: '#ffffff', fontSize: 24, fontWeight: 'bold' },
-  summaryLabel: { color: '#6b7280', fontSize: 13, marginTop: 4 },
-  summaryDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.1)' },
+  summaryValue: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
+  summaryLabel: { color: '#6b7280', fontSize: 10, marginTop: 2 },
+  summaryDivider: { width: 1, height: 26, backgroundColor: '#1f3d32' },
 
-  // Empty State
-  emptyState: { alignItems: 'center', justifyContent: 'center', paddingVertical: 50, backgroundColor: '#0f2920', borderRadius: 20 },
-  emptyTitle: { color: '#6b7280', fontSize: 18, fontWeight: '600', marginTop: 16 },
-  emptySubtitle: { color: '#4b5563', fontSize: 14, marginTop: 4 },
-  emptyAddButton: { 
-    flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#22c55e', 
-    paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12, marginTop: 20 
+  // Seções por Refeição
+  mealSection: { backgroundColor: '#0f2920', borderRadius: 16, padding: 14, marginBottom: 14, borderWidth: 1, borderColor: '#1f3d32' },
+  mealHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  mealHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  mealIconWrapper: { width: 32, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  mealTitle: { color: '#ffffff', fontSize: 15, fontWeight: 'bold' },
+  mealCaloriesBadge: { color: '#9ca3af', fontSize: 12 },
+  mealHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  repeatButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(34, 197, 94, 0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.25)',
   },
-  emptyAddText: { color: '#0a1a15', fontSize: 15, fontWeight: '600' },
+  repeatButtonText: { color: '#22c55e', fontSize: 11, fontWeight: 'bold' },
+  addMealButton: { padding: 4 },
+  emptyMealBox: { paddingVertical: 10, alignItems: 'center' },
+  emptyMealText: { color: '#4b5563', fontSize: 12 },
 
-  // Meal Section
-  mealSection: { marginBottom: 20 },
-  mealHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 10 },
-  mealIconWrapper: { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
-  mealTitle: { color: '#ffffff', fontSize: 16, fontWeight: '600', flex: 1 },
-  mealCalories: { color: '#6b7280', fontSize: 14 },
+  // Itens de Alimento
+  foodList: { gap: 8 },
+  foodItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#153528', padding: 12, borderRadius: 12 },
+  foodInfo: { flex: 1, marginRight: 8 },
+  foodName: { color: '#ffffff', fontSize: 14, fontWeight: '600' },
+  foodDetails: { color: '#9ca3af', fontSize: 11, marginTop: 2 },
+  foodActions: { flexDirection: 'row', gap: 10 },
+  actionBtn: { padding: 4 },
 
-  // Log Item
-  logItem: { 
-    flexDirection: 'row', alignItems: 'center', backgroundColor: '#0f2920', borderRadius: 14, 
-    padding: 14, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)',
-  },
-  logInfo: { flex: 1 },
-  logName: { color: '#ffffff', fontSize: 15, fontWeight: '500' },
-  logMacros: { color: '#6b7280', fontSize: 12, marginTop: 4 },
-  logActions: { flexDirection: 'row', gap: 8 },
-  editButton: { 
-    width: 40, height: 40, borderRadius: 12, backgroundColor: 'rgba(34, 197, 94, 0.15)', 
-    justifyContent: 'center', alignItems: 'center',
-  },
-  deleteButton: { 
-    width: 40, height: 40, borderRadius: 12, backgroundColor: 'rgba(239, 68, 68, 0.15)', 
-    justifyContent: 'center', alignItems: 'center',
-  },
+  // Modais
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
+  modalContent: { backgroundColor: '#0f2920', padding: 22, borderTopLeftRadius: 24, borderTopRightRadius: 24, borderTopWidth: 1, borderColor: '#1f3d32', maxHeight: '85%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  modalTitle: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' },
+  searchBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#153528', borderRadius: 12, paddingHorizontal: 12, borderWidth: 1, borderColor: '#1f3d32', gap: 8, marginBottom: 14 },
+  searchInput: { flex: 1, paddingVertical: 12, color: '#ffffff', fontSize: 14 },
+  searchResultsList: { maxHeight: 320 },
+  searchItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#1f3d32' },
+  searchItemLeft: { flex: 1, marginRight: 10 },
+  searchItemName: { color: '#ffffff', fontSize: 13, fontWeight: '600' },
+  searchItemDetails: { color: '#9ca3af', fontSize: 11, marginTop: 2 },
 
-  // Modal
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
-  modalContent: { 
-    backgroundColor: '#0f2920', borderTopLeftRadius: 24, borderTopRightRadius: 24, 
-    padding: 20, maxHeight: '85%',
-  },
-  modalHeader: { marginBottom: 20 },
-  modalTitle: { color: '#ffffff', fontSize: 22, fontWeight: 'bold' },
-  modalSubtitle: { color: '#22c55e', fontSize: 14, marginTop: 4 },
-  modalClose: { position: 'absolute', right: 0, top: 0, padding: 4 },
+  // Selected Food Preview
+  selectedFoodCard: { backgroundColor: '#153528', padding: 16, borderRadius: 14, borderWidth: 1, borderColor: '#1f3d32' },
+  selectedFoodHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  selectedFoodName: { color: '#ffffff', fontSize: 15, fontWeight: 'bold', flex: 1, marginRight: 8 },
+  portionSliderBox: { marginBottom: 16 },
+  sliderHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
+  sliderLabel: { color: '#9ca3af', fontSize: 12 },
+  sliderVal: { color: '#22c55e', fontSize: 15, fontWeight: 'bold' },
+  previewMacrosRow: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#0f2920', padding: 12, borderRadius: 10, marginBottom: 16 },
+  previewMacro: { alignItems: 'center' },
+  previewMacroVal: { color: '#ffffff', fontSize: 13, fontWeight: 'bold' },
+  previewMacroLbl: { color: '#6b7280', fontSize: 10, marginTop: 2 },
 
-  // Meal Selector
-  mealSelector: { flexDirection: 'row', gap: 8, marginBottom: 16 },
-  mealOption: { 
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    paddingVertical: 10, borderRadius: 12, backgroundColor: '#0a1a15', 
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
-  },
-  mealOptionText: { color: '#6b7280', fontSize: 12, fontWeight: '500' },
+  // Modal Center Confirm
+  modalOverlayCenter: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  confirmBox: { backgroundColor: '#0f2920', borderRadius: 20, padding: 20, width: '100%', borderWidth: 1, borderColor: '#1f3d32' },
+  confirmTitle: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginBottom: 8 },
+  confirmSubtitle: { color: '#9ca3af', fontSize: 14, marginBottom: 20 },
+  confirmActions: { flexDirection: 'row', gap: 10 },
+  cancelBtn: { flex: 1, backgroundColor: '#153528', paddingVertical: 12, borderRadius: 10, alignItems: 'center' },
+  cancelBtnText: { color: '#ffffff', fontWeight: 'bold' },
+  deleteBtn: { flex: 1, backgroundColor: '#ef4444', paddingVertical: 12, borderRadius: 10, alignItems: 'center' },
+  deleteBtnText: { color: '#ffffff', fontWeight: 'bold' },
 
-  // Search
-  searchContainer: { 
-    flexDirection: 'row', alignItems: 'center', backgroundColor: '#0a1a15', 
-    borderRadius: 12, paddingHorizontal: 14, gap: 10, marginBottom: 16,
-  },
-  searchInput: { flex: 1, color: '#ffffff', fontSize: 16, paddingVertical: 14 },
-  searchResults: { maxHeight: 200 },
-  searchItem: { 
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingVertical: 14, paddingHorizontal: 16, backgroundColor: '#0a1a15', 
-    borderRadius: 12, marginBottom: 8,
-  },
-  searchItemSelected: { backgroundColor: 'rgba(34, 197, 94, 0.2)', borderWidth: 1, borderColor: '#22c55e' },
-  searchItemName: { color: '#ffffff', fontSize: 15, fontWeight: '600' },
-  searchItemMeta: { color: '#22c55e', fontSize: 12, marginTop: 3 },
-  searchItemCal: { color: '#6b7280', fontSize: 13, fontWeight: '600' },
-
-  // Add Section
-  addSection: { marginTop: 16, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)', paddingTop: 16 },
-
-  // Macro Preview
-  macroPreviewRow: { flexDirection: 'row', gap: 8, marginBottom: 20 },
-  macroPreviewItem: { flex: 1, backgroundColor: '#153528', padding: 12, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#1f3d32' },
-  macroPreviewHighlight: { backgroundColor: '#22c55e', borderColor: '#22c55e' },
-  macroPreviewValue: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
-  macroPreviewLabel: { color: '#6b7280', fontSize: 10, marginTop: 2 },
-
-  // Slider
-  sliderHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  sliderLabel: { color: '#ffffff', fontSize: 16 },
-  sliderValue: { color: '#ffffff', fontSize: 28, fontWeight: 'bold' },
-  sliderUnit: { fontSize: 14, fontWeight: 'normal' },
-  slider: { width: '100%', height: 40 },
-  sliderRange: { flexDirection: 'row', justifyContent: 'space-between' },
-  sliderRangeText: { color: '#6b7280', fontSize: 12 },
-
-  quantityRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
-  quantityLabel: { color: '#9ca3af', fontSize: 15 },
-  quantityInput: { 
-    flex: 1, backgroundColor: '#0a1a15', borderRadius: 10, paddingHorizontal: 14, 
-    paddingVertical: 12, color: '#ffffff', fontSize: 16, textAlign: 'center',
-  },
-  confirmButton: { 
-    backgroundColor: '#22c55e', borderRadius: 14, paddingVertical: 16, alignItems: 'center' 
-  },
-  confirmButtonText: { color: '#0a1a15', fontSize: 16, fontWeight: '600' },
-  
-  // Edit Section
-  editSection: { marginTop: 16, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)', paddingTop: 16 },
-
-  // Delete Modal
-  deleteModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
-  deleteModalContent: { 
-    backgroundColor: '#0f2920', borderRadius: 20, padding: 24, marginHorizontal: 20, maxWidth: 400, width: '90%',
-    borderWidth: 1, borderColor: 'rgba(239, 68, 68, 0.3)',
-  },
-  deleteModalTitle: { color: '#ffffff', fontSize: 20, fontWeight: 'bold', marginBottom: 12 },
-  deleteModalText: { color: '#9ca3af', fontSize: 15, lineHeight: 22, marginBottom: 24 },
-  deleteModalButtons: { flexDirection: 'row', gap: 12 },
-  cancelButton: { 
-    flex: 1, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 12, paddingVertical: 14, alignItems: 'center',
-  },
-  cancelButtonText: { color: '#ffffff', fontSize: 15, fontWeight: '600' },
-  deleteConfirmButton: { 
-    flex: 1, backgroundColor: '#ef4444', borderRadius: 12, paddingVertical: 14, alignItems: 'center',
-  },
-  deleteButtonText: { color: '#ffffff', fontSize: 15, fontWeight: '600' },
+  inputLabel: { color: '#9ca3af', fontSize: 13, marginBottom: 8, marginTop: 10 },
+  input: { backgroundColor: '#153528', borderRadius: 12, padding: 14, color: '#ffffff', fontSize: 15, borderWidth: 1, borderColor: '#1f3d32', marginBottom: 14 },
+  primaryButton: { backgroundColor: '#22c55e', paddingVertical: 14, borderRadius: 12, alignItems: 'center', marginTop: 10 },
+  primaryButtonText: { color: '#0a1a15', fontWeight: 'bold', fontSize: 15 },
 });
