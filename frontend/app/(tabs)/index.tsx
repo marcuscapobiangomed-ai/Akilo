@@ -3,7 +3,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { api } from '../../core/api';
 import { useRouter } from 'expo-router';
-import { Plus, Droplets, Scale, X, Flame, Dumbbell, Wheat, Droplet, Sparkles, Activity, Clock, Check, Trophy } from 'lucide-react-native';
+import { Plus, Droplets, Scale, X, Flame, Dumbbell, Wheat, Droplet, Sparkles, Activity, Clock, Check, Trophy, Palette, Zap } from 'lucide-react-native';
 import { supabase } from '../../core/supabase';
 import Svg, { Circle, G } from 'react-native-svg';
 import { useToast } from '../../components/Toast';
@@ -12,6 +12,14 @@ import { BarChart } from 'react-native-gifted-charts';
 import { dataEvents } from '../../core/dataEvents';
 import { ensureFoodDB } from '../../core/foodDB';
 import { CommunityModal } from '../../components/CommunityModal';
+import { calculateBMI } from '../../core/domain/bodyComposition';
+import { evaluateMascot, generateHomeMascotSpeech, type MascotId, type MascotCustomization } from '../../core/domain/avatarEngine';
+import { getMascotImage } from '../../assets/avatars';
+import { LivingAvatar3D } from '../../components/LivingAvatar3D';
+import { MascotStudioModal } from '../../components/MascotStudioModal';
+import { BioCheckinCeremonyModal } from '../../components/BioCheckinCeremonyModal';
+import { evaluateBioReaction, type BioReactionResult } from '../../core/domain/bioReactionEngine';
+import { soundHaptics } from '../../core/soundHaptics';
 
 const { width } = Dimensions.get('window');
 
@@ -111,6 +119,28 @@ export default function Dashboard() {
   const [exerciseNotes, setExerciseNotes] = useState('');
   const [savingExercise, setSavingExercise] = useState(false);
   const [communityModalVisible, setCommunityModalVisible] = useState(false);
+  const [mascotStudioVisible, setMascotStudioVisible] = useState(false);
+
+  // Estados do Check-in Periódico de Bioimpedância & Peso (+15 pts no grupo)
+  const [profile, setProfile] = useState<any>(null);
+  const [checkinStatus, setCheckinStatus] = useState<any>(null);
+  const [checkinModalVisible, setCheckinModalVisible] = useState(false);
+  const [checkinForm, setCheckinForm] = useState({
+    weight: '',
+    bodyFat: '',
+    muscleMass: '',
+    bodyWater: '',
+    waist: '',
+    basalMetabolism: '',
+    metabolicAge: '',
+    notes: '',
+  });
+  const [savingCheckin, setSavingCheckin] = useState(false);
+  const [skippingCheckin, setSkippingCheckin] = useState(false);
+  const [inspectCheckinAvatar, setInspectCheckinAvatar] = useState(false);
+  const [homeMascotInspect, setHomeMascotInspect] = useState(false);
+  const [ceremonyModalVisible, setCeremonyModalVisible] = useState(false);
+  const [activeReactionResult, setActiveReactionResult] = useState<BioReactionResult | null>(null);
 
   const calorieFadeAnim = useRef(new Animated.Value(1)).current;
   const calorieScaleAnim = useRef(new Animated.Value(1)).current;
@@ -128,6 +158,18 @@ export default function Dashboard() {
       const today = new Date().toISOString().split('T')[0];
       const res = await api.get('/api/analytics/daily', { date: today });
       setData(res);
+
+      // Perfil do usuário (para mascote e bioimpedância)
+      try {
+        const profRes = await api.get('/api/profile/');
+        setProfile(profRes);
+      } catch (e) {}
+
+      // Status do Check-in Periódico de Bioimpedância & Peso
+      try {
+        const cStatus = await api.get('/api/checkin/status');
+        setCheckinStatus(cStatus);
+      } catch (e) {}
 
       // Streak
       try {
@@ -180,10 +222,170 @@ export default function Dashboard() {
     const unsub5 = dataEvents.on('weight_logged', fetchDashboard);
     const unsub6 = dataEvents.on('targets_updated', fetchDashboard);
     const unsub7 = dataEvents.on('exercise_logged', fetchDashboard);
+    const unsub8 = dataEvents.on('checkin_logged', fetchDashboard);
+    const unsub9 = dataEvents.on('checkin_skipped', fetchDashboard);
     return () => {
-      unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7();
+      unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9();
     };
   }, []);
+
+  // Ações de Check-in
+  const handleOpenCheckinModal = () => {
+    const prof = checkinStatus?.profile || profile;
+    setCheckinForm({
+      weight: prof?.weight_kg ? String(prof.weight_kg) : '',
+      bodyFat: prof?.body_fat_pct !== undefined && prof?.body_fat_pct !== null ? String(prof.body_fat_pct) : '',
+      muscleMass: prof?.muscle_mass_pct !== undefined && prof?.muscle_mass_pct !== null ? String(prof.muscle_mass_pct) : '',
+      bodyWater: prof?.body_water_pct !== undefined && prof?.body_water_pct !== null ? String(prof.body_water_pct) : '',
+      waist: prof?.waist_cm ? String(prof.waist_cm) : '',
+      basalMetabolism: prof?.basal_metabolism_kcal ? String(prof.basal_metabolism_kcal) : '',
+      metabolicAge: prof?.metabolic_age ? String(prof.metabolic_age) : '',
+      notes: '',
+    });
+    setCheckinModalVisible(true);
+  };
+
+  const handleSkipCheckin = async () => {
+    setSkippingCheckin(true);
+    try {
+      await api.post('/api/checkin/skip', {});
+      showToast('Check-in adiado por 3 dias. Sem cobranças! 👍', 'info');
+      setCheckinStatus((prev: any) => prev ? { ...prev, isDue: false } : null);
+      setCheckinModalVisible(false);
+    } catch (e) {
+      showToast('Erro ao adiar verificação', 'error');
+    } finally {
+      setSkippingCheckin(false);
+    }
+  };
+
+  const handleSaveCheckin = async () => {
+    const parsedWeight = parseFloat(checkinForm.weight.replace(',', '.'));
+    if (!parsedWeight || isNaN(parsedWeight) || parsedWeight <= 0) {
+      showToast('Informe seu peso atual em kg', 'error');
+      return;
+    }
+
+    setSavingCheckin(true);
+    try {
+      const prof = checkinStatus?.profile || profile;
+      let bmi: number | null = null;
+      if (prof?.height_cm && prof.height_cm > 0) {
+        const bmiEval = calculateBMI(parsedWeight, prof.height_cm);
+        if (bmiEval) bmi = bmiEval.bmi;
+      }
+
+      const parsedWaist = checkinForm.waist ? parseFloat(checkinForm.waist.replace(',', '.')) : null;
+
+      const payload = {
+        weight_kg: parsedWeight,
+        bmi,
+        body_fat_pct: checkinForm.bodyFat ? parseFloat(checkinForm.bodyFat.replace(',', '.')) : null,
+        muscle_mass_pct: checkinForm.muscleMass ? parseFloat(checkinForm.muscleMass.replace(',', '.')) : null,
+        body_water_pct: checkinForm.bodyWater ? parseFloat(checkinForm.bodyWater.replace(',', '.')) : null,
+        waist_cm: parsedWaist,
+        basal_metabolism_kcal: checkinForm.basalMetabolism ? parseInt(checkinForm.basalMetabolism, 10) : null,
+        metabolic_age: checkinForm.metabolicAge ? parseInt(checkinForm.metabolicAge, 10) : null,
+        notes: checkinForm.notes.trim() || undefined,
+      };
+
+      await api.post('/api/checkin/log', payload);
+      setCheckinModalVisible(false);
+      setCheckinStatus((prev: any) => prev ? { ...prev, isDue: false } : null);
+
+      // Dispara a Cerimônia de Bioimpedância Viva com Análise do Mascote
+      try {
+        const compRes = await api.get('/api/checkin/comparison').catch(() => null);
+        const bioReaction = evaluateBioReaction({
+          current: {
+            weightKg: parsedWeight,
+            bodyFatPct: payload.body_fat_pct,
+            muscleMassPct: payload.muscle_mass_pct,
+            bodyWaterPct: payload.body_water_pct,
+            waistCm: payload.waist_cm,
+          },
+          previous: compRes?.latestBio ? {
+            weightKg: compRes.latestBio.weightKg,
+            bodyFatPct: compRes.latestBio.bodyFatPct,
+            muscleMassPct: compRes.latestBio.muscleMassPct,
+            waistCm: compRes.latestBio.waistCm,
+          } : (latestWeight ? { weightKg: latestWeight } : null),
+          baseline: compRes?.firstBio ? {
+            weightKg: compRes.firstBio.weightKg,
+            bodyFatPct: compRes.firstBio.bodyFatPct,
+            waistCm: compRes.firstBio.waistCm,
+          } : null,
+          mascotId: currentMascotId,
+          sex: currentSex,
+          heightCm: profile?.height_cm || 170,
+          userName: profile?.name || 'Guerreiro',
+          previousStageLevel: (typeof mascotEval !== 'undefined' && mascotEval?.stageLevel) ? mascotEval.stageLevel : 1,
+        });
+
+        setActiveReactionResult(bioReaction);
+        setCeremonyModalVisible(true);
+      } catch (ce) {
+        showToast('Check-in registrado! +15 pts no ranking da semana! 🎉', 'success');
+      }
+
+      fetchDashboard();
+    } catch (e: any) {
+      showToast(e.message || 'Falha ao salvar check-in', 'error');
+    } finally {
+      setSavingCheckin(false);
+    }
+  };
+
+  const handleOpenBioCeremony = async () => {
+    try {
+      const compRes = await api.get('/api/checkin/comparison').catch(() => null);
+      const curWeight = latestWeight || profile?.weight_kg || 75.0;
+      const curBf = profile?.body_fat_pct || 22.0;
+      const curMuscle = profile?.muscle_mass_pct || 35.0;
+      const curWaist = profile?.waist_cm || 88.0;
+
+      const bioReaction = evaluateBioReaction({
+        current: {
+          weightKg: curWeight,
+          bodyFatPct: curBf,
+          muscleMassPct: curMuscle,
+          bodyWaterPct: profile?.body_water_pct || 55.0,
+          waistCm: curWaist,
+        },
+        previous: (compRes?.latestBio && compRes.latestBio.weightKg > 20) ? {
+          weightKg: compRes.latestBio.weightKg,
+          bodyFatPct: compRes.latestBio.bodyFatPct,
+          muscleMassPct: compRes.latestBio.muscleMassPct,
+          waistCm: compRes.latestBio.waistCm,
+        } : {
+          // Fallback realista para demonstração de Queima de Ouro
+          weightKg: +(curWeight + 1.2).toFixed(1),
+          bodyFatPct: +(curBf + 1.4).toFixed(1),
+          muscleMassPct: curMuscle,
+          waistCm: +(curWaist + 2.0).toFixed(1),
+        },
+        baseline: (compRes?.firstBio && compRes.firstBio.weightKg > 20) ? {
+          weightKg: compRes.firstBio.weightKg,
+          bodyFatPct: compRes.firstBio.bodyFatPct,
+          waistCm: compRes.firstBio.waistCm,
+        } : {
+          weightKg: +(curWeight + 6.0).toFixed(1),
+          bodyFatPct: +(curBf + 5.0).toFixed(1),
+          waistCm: +(curWaist + 8.0).toFixed(1),
+        },
+        mascotId: currentMascotId,
+        sex: currentSex,
+        heightCm: profile?.height_cm || 170,
+        userName: profile?.name || (currentMascotId === 'gaia' ? 'Guerreira' : 'Guerreiro'),
+        previousStageLevel: (typeof mascotEval !== 'undefined' && mascotEval?.stageLevel) ? mascotEval.stageLevel : 1,
+      });
+
+      setActiveReactionResult(bioReaction);
+      setCeremonyModalVisible(true);
+    } catch (e) {
+      console.warn('Erro ao abrir cerimônia:', e);
+    }
+  };
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -253,6 +455,26 @@ export default function Dashboard() {
     }
   };
 
+  const handleSaveMascotCustomization = async (newMascotId: MascotId, newCustom: MascotCustomization) => {
+    try {
+      await api.put('/api/profile/', {
+        avatar_mascot_id: newMascotId,
+        avatar_customization: newCustom,
+      });
+      setProfile((prev: any) => ({
+        ...prev,
+        avatar_mascot_id: newMascotId,
+        avatar_customization: newCustom,
+      }));
+      showToast(`Visual 3D de ${newMascotId === 'tita' ? 'Titã 🥊' : 'Gaia 👑'} salvo com sucesso!`, 'success');
+      setHomeMascotInspect(true);
+      setTimeout(() => setHomeMascotInspect(false), 4500);
+    } catch (e) {
+      console.error('Erro ao salvar personalização:', e);
+      showToast('Falha ao salvar personalização', 'error');
+    }
+  };
+
   useEffect(() => {
     Animated.parallel([
       Animated.timing(calorieFadeAnim, { toValue: 0, duration: 140, useNativeDriver: true }),
@@ -284,6 +506,57 @@ export default function Dashboard() {
   const calProgress = caloriesTarget > 0 ? caloriesConsumed / caloriesTarget : 0;
   const waterProgress = targets?.water_target_ml ? (summary.water || 0) / targets.water_target_ml : 0;
 
+  // Avaliação Dinâmica do Mascote
+  const currentSex = (profile?.sex === 'female' ? 'female' : 'male') as any;
+  const currentMascotId: MascotId = (profile?.avatar_mascot_id as MascotId) || (currentSex === 'female' ? 'gaia' : 'tita');
+  const mascotEval = evaluateMascot({
+    mascotId: currentMascotId,
+    sex: currentSex,
+    weightKg: latestWeight || profile?.weight_kg || 70,
+    heightCm: profile?.height_cm || 170,
+    bodyFatPct: profile?.body_fat_pct,
+    muscleMassPct: profile?.muscle_mass_pct,
+    bodyWaterPct: profile?.body_water_pct,
+    waistCm: profile?.waist_cm,
+    initialWeightKg: profile?.initial_weight_kg || profile?.weight_kg,
+    initialBodyFatPct: profile?.initial_body_fat_pct || profile?.body_fat_pct,
+    initialWaistCm: profile?.initial_waist_cm || profile?.waist_cm,
+    goalType: profile?.goal_type,
+    customization: profile?.avatar_customization,
+  });
+
+  // Falas Interativas em Tempo Real do Mascote para a Tela Inicial
+  const homeSpeech = generateHomeMascotSpeech({
+    mascotId: currentMascotId,
+    caloriesTarget: caloriesTarget,
+    caloriesConsumed: caloriesConsumed,
+    proteinG: summary.protein || 0,
+    proteinTargetG: targets?.protein_target_g || targets?.protein_g_target || 140,
+    archetype: mascotEval.archetype,
+    userName: profile?.name,
+  });
+
+  // Avaliação Dinâmica em Tempo Real durante o Check-in (conforme o usuário digita peso, gordura, massa muscular)
+  const formWeightNum = parseFloat(checkinForm.weight.replace(',', '.'));
+  const formFatNum = checkinForm.bodyFat ? parseFloat(checkinForm.bodyFat.replace(',', '.')) : undefined;
+  const formMuscleNum = checkinForm.muscleMass ? parseFloat(checkinForm.muscleMass.replace(',', '.')) : undefined;
+  const formWaistNum = checkinForm.waist ? parseFloat(checkinForm.waist.replace(',', '.')) : undefined;
+
+  const activeCheckinEval = evaluateMascot({
+    mascotId: currentMascotId,
+    sex: currentSex,
+    weightKg: !isNaN(formWeightNum) && formWeightNum > 0 ? formWeightNum : (latestWeight || profile?.weight_kg || 70),
+    heightCm: profile?.height_cm || 170,
+    bodyFatPct: formFatNum !== undefined && !isNaN(formFatNum) ? formFatNum : profile?.body_fat_pct,
+    muscleMassPct: formMuscleNum !== undefined && !isNaN(formMuscleNum) ? formMuscleNum : profile?.muscle_mass_pct,
+    waistCm: formWaistNum !== undefined && !isNaN(formWaistNum) ? formWaistNum : profile?.waist_cm,
+    initialWeightKg: profile?.initial_weight_kg || profile?.weight_kg,
+    initialBodyFatPct: profile?.initial_body_fat_pct || profile?.body_fat_pct,
+    initialWaistCm: profile?.initial_waist_cm || profile?.waist_cm,
+    goalType: profile?.goal_type,
+    customization: profile?.avatar_customization,
+  });
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView
@@ -294,7 +567,7 @@ export default function Dashboard() {
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Image source={require('../../assets/logo.png')} style={styles.logoImage} />
-            <Text style={styles.appName}>Akilo</Text>
+            <Text style={styles.appName} numberOfLines={1}>Batalha da Balança</Text>
           </View>
           <View style={styles.headerRight}>
             <View style={styles.dateContainer}>
@@ -313,43 +586,207 @@ export default function Dashboard() {
           </View>
         </View>
 
-        {/* Círculo Principal de Calorias */}
-        <View style={styles.calorieSection}>
+        {/* Banner do Mascote e Check-in Oficial */}
+        {checkinStatus?.isDue ? (
+          <View style={styles.checkinBanner}>
+            <View style={styles.checkinBannerHeader}>
+              <View style={styles.mascotBannerAvatarWrapper}>
+                <Image 
+                  source={getMascotImage(mascotEval.assetKey)} 
+                  style={{ width: 48, height: 58, borderRadius: 12 }} 
+                  resizeMode="contain" 
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Text style={styles.checkinBannerTitle}>{mascotEval.mascotName}: Hora do Check-in!</Text>
+                  <View style={styles.checkinPointsBadge}>
+                    <Sparkles color="#eab308" size={12} />
+                    <Text style={styles.checkinPointsText}>+15 pts</Text>
+                  </View>
+                </View>
+                <Text style={styles.checkinBannerSubtitle}>
+                  "{mascotEval.flavorQuote}"
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.checkinBannerActions}>
+              <TouchableOpacity
+                style={styles.checkinPrimaryBtn}
+                onPress={handleOpenCheckinModal}
+                activeOpacity={0.8}
+              >
+                <Scale color="#0a1a15" size={16} />
+                <Text style={styles.checkinPrimaryBtnText}>Atualizar Medidas Agora</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.checkinSkipBtn}
+                onPress={handleSkipCheckin}
+                disabled={skippingCheckin}
+                activeOpacity={0.8}
+              >
+                <Clock color="#9ca3af" size={15} />
+                <Text style={styles.checkinSkipBtnText}>
+                  {skippingCheckin ? 'Adiado...' : 'Pular verificação'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
+
+        {/* 🌟 ARENA HERO: PERSONAGEM 3D CENTRAL & META CALÓRICA INTERATIVA */}
+        <View style={styles.mascotHeroArena}>
+          {/* 1. Balão de Fala Dinâmica do Mascote */}
           <TouchableOpacity
-            style={styles.calorieCircleContainer}
-            activeOpacity={0.8}
-            onPress={() => setShowCaloriePercentage(!showCaloriePercentage)}
+            style={styles.heroSpeechBubbleWrapper}
+            activeOpacity={0.88}
+            onPress={() => {
+              soundHaptics.triggerMediumTap();
+              setHomeMascotInspect(true);
+              setTimeout(() => setHomeMascotInspect(false), 4500);
+            }}
           >
-            <CircularProgress progress={calProgress} size={220} strokeWidth={16} color="#22c55e" />
-            <Animated.View
-              style={[styles.calorieCenter, { opacity: calorieFadeAnim, transform: [{ scale: calorieScaleAnim }] }]}
-            >
-              {showCaloriePercentage ? (
-                <>
-                  <Text style={styles.calorieLabel}>Meta Atingida</Text>
-                  <Text style={styles.calorieValue}>{Math.round(calProgress * 100)}%</Text>
-                  <Text style={styles.calorieUnit}>CONCLUÍDO</Text>
-                </>
-              ) : (
-                <>
-                  <Text style={styles.calorieLabel}>Restante</Text>
-                  <Text style={styles.calorieValue}>{caloriesRemaining.toLocaleString('pt-BR')}</Text>
-                  <Text style={styles.calorieUnit}>KCAL</Text>
-                </>
-              )}
-            </Animated.View>
+            <View style={[styles.heroSpeechBubble, { borderColor: mascotEval.badgeColor || '#facc15' }]}>
+              <View style={styles.heroSpeechHeaderRow}>
+                <View style={[styles.heroSpeechBadge, { backgroundColor: `${mascotEval.badgeColor}25`, borderColor: mascotEval.badgeColor }]}>
+                  <Sparkles color={mascotEval.badgeColor || '#facc15'} size={12} />
+                  <Text style={[styles.heroSpeechSpeaker, { color: mascotEval.badgeColor || '#facc15' }]}>
+                    {mascotEval.mascotName} • {mascotEval.badgeLabel}
+                  </Text>
+                </View>
+
+                <View style={{ flexDirection: 'row', gap: 6 }}>
+                  <TouchableOpacity 
+                    style={[styles.heroCustomizePill, { borderColor: '#22c55e' }]}
+                    onPress={(e) => {
+                      e.stopPropagation?.();
+                      handleOpenBioCeremony();
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Zap color="#22c55e" size={12} />
+                    <Text style={[styles.heroCustomizePillText, { color: '#22c55e' }]}>Cerimônia</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity 
+                    style={styles.heroCustomizePill}
+                    onPress={(e) => {
+                      e.stopPropagation?.();
+                      setMascotStudioVisible(true);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Palette color="#c084fc" size={12} />
+                    <Text style={styles.heroCustomizePillText}>Personalizar 3D</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <Text style={styles.heroSpeechMainText}>{homeSpeech.mainSpeech}</Text>
+              <Text style={styles.heroSpeechSubText}>{homeSpeech.subSpeech}</Text>
+            </View>
+            <View style={[styles.heroSpeechTail, { borderTopColor: mascotEval.badgeColor || '#facc15' }]} />
           </TouchableOpacity>
 
-          <View style={styles.calorieStats}>
-            <View style={styles.calorieStat}>
-              <Text style={styles.calorieStatLabel}>Consumido</Text>
-              <Text style={styles.calorieStatValue}>{caloriesConsumed.toLocaleString('pt-BR')}</Text>
+          {/* 2. Palco 3D Vivo com Anel Calórico Integrado */}
+          <View style={styles.heroStageContainer}>
+            {/* Halo / Anel Circular de Progresso Calórico ao redor da base da balança */}
+            <View style={styles.heroProgressHalo}>
+              <CircularProgress 
+                progress={calProgress} 
+                size={244} 
+                strokeWidth={10} 
+                color={calProgress > 1 ? '#ef4444' : (mascotEval.badgeColor || '#22c55e')} 
+              />
             </View>
-            <View style={styles.calorieStatDivider} />
-            <View style={styles.calorieStat}>
-              <Text style={styles.calorieStatLabel}>Meta Diária</Text>
-              <Text style={styles.calorieStatValue}>{caloriesTarget.toLocaleString('pt-BR')}</Text>
+
+            {/* O Mascote 3D Vivo na Balança */}
+            <View style={styles.heroAvatarContainer}>
+              <LivingAvatar3D 
+                mascotId={currentMascotId}
+                weightKg={latestWeight || profile?.weight_kg || 70}
+                heightCm={profile?.height_cm || 170}
+                bodyFatPct={profile?.body_fat_pct}
+                muscleMassPct={profile?.muscle_mass_pct}
+                morphology={mascotEval.morphology}
+                customization={profile?.avatar_customization}
+                size={205}
+                simple={false}
+                hideBubble={true}
+                isInspecting={homeMascotInspect}
+                onInspectionTrigger={() => {
+                  soundHaptics.triggerMediumTap();
+                  setHomeMascotInspect(true);
+                  setTimeout(() => setHomeMascotInspect(false), 4500);
+                }}
+              />
             </View>
+          </View>
+
+          {/* 3. Placar de Calorias (Consumido, Restante / Progresso, Meta Diária) */}
+          <View style={styles.heroScoreboard}>
+            <View style={styles.heroScoreCol}>
+              <Text style={styles.heroScoreLabel}>Consumido</Text>
+              <Text style={styles.heroScoreValue}>{caloriesConsumed.toLocaleString('pt-BR')}</Text>
+              <Text style={styles.heroScoreUnit}>KCAL</Text>
+            </View>
+
+            <View style={styles.heroScoreDivider} />
+
+            <TouchableOpacity
+              style={styles.heroScoreCenterCol}
+              activeOpacity={0.8}
+              onPress={() => setShowCaloriePercentage(!showCaloriePercentage)}
+            >
+              <Animated.View style={{ opacity: calorieFadeAnim, transform: [{ scale: calorieScaleAnim }], alignItems: 'center' }}>
+                <Text style={[styles.heroScoreLabel, { color: '#22c55e', fontWeight: 'bold' }]}>
+                  {showCaloriePercentage ? 'Meta Atingida' : 'Restante'}
+                </Text>
+                <Text style={[styles.heroScoreHighlightValue, { color: calProgress > 1 ? '#ef4444' : '#22c55e' }]}>
+                  {showCaloriePercentage
+                    ? `${Math.round(calProgress * 100)}%`
+                    : caloriesRemaining.toLocaleString('pt-BR')}
+                </Text>
+                <Text style={styles.heroScoreUnit}>
+                  {showCaloriePercentage ? 'CONCLUÍDO' : 'KCAL'}
+                </Text>
+              </Animated.View>
+            </TouchableOpacity>
+
+            <View style={styles.heroScoreDivider} />
+
+            <View style={styles.heroScoreCol}>
+              <Text style={styles.heroScoreLabel}>Meta Diária</Text>
+              <Text style={styles.heroScoreValue}>{caloriesTarget.toLocaleString('pt-BR')}</Text>
+              <Text style={styles.heroScoreUnit}>KCAL</Text>
+            </View>
+          </View>
+
+          {/* 4. Ações Rápidas no Mascote */}
+          <View style={styles.heroActionsRow}>
+            <TouchableOpacity 
+              style={styles.heroActionBtn}
+              onPress={() => {
+                soundHaptics.triggerMediumTap();
+                setHomeMascotInspect(true);
+                setTimeout(() => setHomeMascotInspect(false), 4500);
+              }}
+              activeOpacity={0.8}
+            >
+              <Sparkles color="#38bdf8" size={13} />
+              <Text style={styles.heroActionBtnText}>Inspecionar Corpo</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.heroActionBtn, { borderColor: 'rgba(34, 197, 94, 0.4)' }]}
+              onPress={() => router.push('/(tabs)/profile')}
+              activeOpacity={0.8}
+            >
+              <Scale color="#22c55e" size={13} />
+              <Text style={[styles.heroActionBtnText, { color: '#22c55e' }]}>Ver Bioimpedância</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -651,10 +1088,206 @@ export default function Dashboard() {
         </View>
       </Modal>
 
+      {/* MODAL DE CHECK-IN DE BIOIMPEDÂNCIA */}
+      <Modal visible={checkinModalVisible} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '90%' }]}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <View style={[styles.checkinIconWrapper, { width: 36, height: 36 }]}>
+                  <Scale color="#22c55e" size={20} />
+                </View>
+                <View>
+                  <Text style={styles.modalTitle}>Check-in de Medidas</Text>
+                  <Text style={styles.modalSubtitle}>Garante +15 pts para a competição</Text>
+                </View>
+              </View>
+              <TouchableOpacity onPress={() => setCheckinModalVisible(false)} style={styles.closeBtn}>
+                <X color="#9ca3af" size={22} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
+              {/* Balão de Incentivo & Palco 3D Vivo do Mascote na Balança */}
+              <View style={styles.checkinLivingStage}>
+                <LivingAvatar3D 
+                  mascotId={currentMascotId}
+                  weightKg={!isNaN(formWeightNum) && formWeightNum > 0 ? formWeightNum : (latestWeight || profile?.weight_kg || 70)}
+                  heightCm={profile?.height_cm || 170}
+                  bodyFatPct={formFatNum !== undefined && !isNaN(formFatNum) ? formFatNum : profile?.body_fat_pct}
+                  muscleMassPct={formMuscleNum !== undefined && !isNaN(formMuscleNum) ? formMuscleNum : profile?.muscle_mass_pct}
+                  morphology={activeCheckinEval.morphology}
+                  customization={profile?.avatar_customization}
+                  isInspecting={inspectCheckinAvatar}
+                  onInspectionTrigger={() => {
+                    setInspectCheckinAvatar(true);
+                    setTimeout(() => setInspectCheckinAvatar(false), 5500);
+                  }}
+                  size={195}
+                />
+                <Text style={styles.checkinStageHint}>
+                  💡 Conforme você altera os dados abaixo, o personagem reage em tempo real na balança!
+                </Text>
+              </View>
+
+              <View style={styles.checkinBannerInfo}>
+                <Sparkles color="#eab308" size={16} />
+                <Text style={styles.checkinBannerInfoText}>
+                  Registrar este check-in credita instantaneamente +15 pontos no ranking semanal do seu grupo!
+                </Text>
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Peso Atual (kg) *</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="ex: 75.4"
+                  placeholderTextColor="#6b7280"
+                  keyboardType="decimal-pad"
+                  value={checkinForm.weight}
+                  onChangeText={(v) => setCheckinForm((prev) => ({ ...prev, weight: v }))}
+                />
+              </View>
+
+              <View style={styles.inputRow}>
+                <View style={[styles.inputGroup, { flex: 1 }]}>
+                  <Text style={styles.inputLabel}>Gordura Corporal (%)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="ex: 18.5"
+                    placeholderTextColor="#6b7280"
+                    keyboardType="decimal-pad"
+                    value={checkinForm.bodyFat}
+                    onChangeText={(v) => setCheckinForm((prev) => ({ ...prev, bodyFat: v }))}
+                  />
+                </View>
+
+                <View style={[styles.inputGroup, { flex: 1 }]}>
+                  <Text style={styles.inputLabel}>Massa Muscular (%)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="ex: 38.0"
+                    placeholderTextColor="#6b7280"
+                    keyboardType="decimal-pad"
+                    value={checkinForm.muscleMass}
+                    onChangeText={(v) => setCheckinForm((prev) => ({ ...prev, muscleMass: v }))}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.inputRow}>
+                <View style={[styles.inputGroup, { flex: 1 }]}>
+                  <Text style={styles.inputLabel}>Água Corporal (%)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="ex: 58.0"
+                    placeholderTextColor="#6b7280"
+                    keyboardType="decimal-pad"
+                    value={checkinForm.bodyWater}
+                    onChangeText={(v) => setCheckinForm((prev) => ({ ...prev, bodyWater: v }))}
+                  />
+                </View>
+
+                <View style={[styles.inputGroup, { flex: 1 }]}>
+                  <Text style={styles.inputLabel}>Idade Metabólica</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="ex: 25"
+                    placeholderTextColor="#6b7280"
+                    keyboardType="numeric"
+                    value={checkinForm.metabolicAge}
+                    onChangeText={(v) => setCheckinForm((prev) => ({ ...prev, metabolicAge: v }))}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Cintura / Medidas (cm)</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="ex: 85.0"
+                  placeholderTextColor="#6b7280"
+                  keyboardType="decimal-pad"
+                  value={checkinForm.waist}
+                  onChangeText={(v) => setCheckinForm((prev) => ({ ...prev, waist: v }))}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Metabolismo Basal (kcal/dia da balança)</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="ex: 1650"
+                  placeholderTextColor="#6b7280"
+                  keyboardType="numeric"
+                  value={checkinForm.basalMetabolism}
+                  onChangeText={(v) => setCheckinForm((prev) => ({ ...prev, basalMetabolism: v }))}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Observações (opcional)</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="ex: Pesagem em jejum logo após acordar"
+                  placeholderTextColor="#6b7280"
+                  value={checkinForm.notes}
+                  onChangeText={(v) => setCheckinForm((prev) => ({ ...prev, notes: v }))}
+                />
+              </View>
+
+              <TouchableOpacity
+                style={[styles.saveBtn, savingCheckin && styles.buttonDisabled, { marginTop: 16 }]}
+                onPress={handleSaveCheckin}
+                disabled={savingCheckin}
+              >
+                <Check color="#0a1a15" size={20} />
+                <Text style={styles.saveBtnText}>
+                  {savingCheckin ? 'Salvando...' : 'Confirmar Check-in (+15 pts)'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.skipInModalBtn}
+                onPress={handleSkipCheckin}
+                disabled={skippingCheckin}
+              >
+                <Text style={styles.skipInModalBtnText}>Pular esta verificação (lembrar depois)</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       {/* Modal de Comunidade & Ranking Semanal */}
       <CommunityModal
         visible={communityModalVisible}
         onClose={() => setCommunityModalVisible(false)}
+      />
+
+      {/* MODAL DO ESTÚDIO 3D DE PERSONALIZAÇÃO */}
+      <MascotStudioModal
+        visible={mascotStudioVisible}
+        onClose={() => setMascotStudioVisible(false)}
+        mascotId={currentMascotId}
+        customization={profile?.avatar_customization}
+        weightKg={latestWeight || profile?.weight_kg || 70}
+        heightCm={profile?.height_cm || 170}
+        bodyFatPct={profile?.body_fat_pct}
+        muscleMassPct={profile?.muscle_mass_pct}
+        onSave={handleSaveMascotCustomization}
+      />
+
+      {/* MODAL DA CERIMÔNIA DE BIOIMPEDÂNCIA VIVA */}
+      <BioCheckinCeremonyModal
+        visible={ceremonyModalVisible}
+        onClose={() => setCeremonyModalVisible(false)}
+        reactionResult={activeReactionResult}
+        onContinue={() => {
+          setCeremonyModalVisible(false);
+          fetchDashboard();
+        }}
       />
     </SafeAreaView>
   );
@@ -664,17 +1297,16 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a1a15' },
   scrollContent: { padding: 18, paddingBottom: 100 },
 
-  // Header
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  logoImage: { width: 38, height: 38, resizeMode: 'contain' },
-  appName: { color: '#ffffff', fontSize: 22, fontWeight: 'bold' },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, marginRight: 6 },
+  logoImage: { width: 32, height: 32, borderRadius: 8, resizeMode: 'contain' },
+  appName: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   dateContainer: { alignItems: 'flex-end' },
-  dateLabel: { color: '#6b7280', fontSize: 10, fontWeight: '600', letterSpacing: 0.5 },
-  dateValue: { color: '#ffffff', fontSize: 13, fontWeight: 'bold' },
-  streakBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1f3d32', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20, gap: 4 },
-  streakText: { color: '#ffffff', fontWeight: 'bold' },
+  dateLabel: { color: '#6b7280', fontSize: 9, fontWeight: '600', letterSpacing: 0.5 },
+  dateValue: { color: '#ffffff', fontSize: 12, fontWeight: 'bold' },
+  streakBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1f3d32', paddingHorizontal: 8, paddingVertical: 5, borderRadius: 16, gap: 4 },
+  streakText: { color: '#ffffff', fontWeight: 'bold', fontSize: 12 },
 
   // Calorie Section
   calorieSection: { alignItems: 'center', marginBottom: 20 },
@@ -911,4 +1543,399 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   communityCardBtnText: { color: '#0a1a15', fontWeight: 'bold', fontSize: 12 },
+
+  // Check-in Banner & Modal
+  checkinBanner: {
+    backgroundColor: '#0d281e',
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1.5,
+    borderColor: '#059669',
+    shadowColor: '#10b981',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  checkinBannerHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 14,
+  },
+  checkinIconWrapper: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: 'rgba(34, 197, 94, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkinBannerTitle: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: 'bold',
+    flex: 1,
+  },
+  checkinPointsBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(234, 179, 8, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(234, 179, 8, 0.3)',
+  },
+  checkinPointsText: {
+    color: '#eab308',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  checkinBannerSubtitle: {
+    color: '#9ca3af',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 4,
+  },
+  checkinBannerActions: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+  },
+  checkinPrimaryBtn: {
+    flex: 1.4,
+    backgroundColor: '#22c55e',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 11,
+    borderRadius: 12,
+  },
+  checkinPrimaryBtnText: {
+    color: '#0a1a15',
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  checkinSkipBtn: {
+    flex: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 11,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  checkinSkipBtnText: {
+    color: '#9ca3af',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  modalHandle: {
+    width: 36,
+    height: 4,
+    backgroundColor: '#374151',
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 14,
+  },
+  modalSubtitle: {
+    color: '#9ca3af',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  checkinBannerInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(234, 179, 8, 0.1)',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(234, 179, 8, 0.25)',
+    marginBottom: 10,
+  },
+  checkinBannerInfoText: {
+    flex: 1,
+    color: '#fbbf24',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  inputGroup: {
+    marginBottom: 6,
+  },
+  closeBtn: {
+    padding: 4,
+  },
+  saveBtn: {
+    backgroundColor: '#22c55e',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 12,
+  },
+  saveBtnText: {
+    color: '#0a1a15',
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  skipInModalBtn: {
+    alignItems: 'center',
+    paddingVertical: 14,
+    marginTop: 6,
+  },
+  skipInModalBtnText: {
+    color: '#9ca3af',
+    fontSize: 13,
+  },
+
+  // ESTILOS DO MASCOTE NO DASHBOARD & CHECK-IN
+  mascotBannerAvatarWrapper: {
+    width: 52,
+    height: 62,
+    borderRadius: 14,
+    backgroundColor: '#0a1a15',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  // 🌟 ESTILOS DA ARENA DO MASCOTE CENTRAL (DASHBOARD HERO)
+  mascotHeroArena: {
+    backgroundColor: '#0a1a15',
+    borderRadius: 24,
+    paddingTop: 16,
+    paddingBottom: 18,
+    paddingHorizontal: 16,
+    marginBottom: 20,
+    borderWidth: 1.5,
+    borderColor: 'rgba(34, 197, 94, 0.35)',
+    alignItems: 'center',
+    shadowColor: '#22c55e',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  heroSpeechBubbleWrapper: {
+    width: '100%',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  heroSpeechBubble: {
+    width: '100%',
+    backgroundColor: '#0f2920',
+    borderRadius: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderWidth: 1.5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+  },
+  heroSpeechHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  heroSpeechBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  heroSpeechSpeaker: {
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  heroCustomizePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(168, 85, 247, 0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(168, 85, 247, 0.5)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  heroCustomizePillText: {
+    color: '#d8b4fe',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  heroSpeechTouchHint: {
+    color: '#9ca3af',
+    fontSize: 10,
+    fontStyle: 'italic',
+  },
+  heroSpeechMainText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: 'bold',
+    lineHeight: 18,
+  },
+  heroSpeechSubText: {
+    color: '#d1fae5',
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 3,
+  },
+  heroSpeechTail: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 7,
+    borderRightWidth: 7,
+    borderTopWidth: 7,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopColor: '#facc15',
+    alignSelf: 'center',
+  },
+  heroStageContainer: {
+    width: 260,
+    height: 285,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    marginVertical: 4,
+  },
+  heroProgressHalo: {
+    position: 'absolute',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroAvatarContainer: {
+    position: 'absolute',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroScoreboard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    backgroundColor: '#0f2920',
+    borderRadius: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.25)',
+    marginTop: 6,
+  },
+  heroScoreCol: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  heroScoreCenterCol: {
+    flex: 1.2,
+    alignItems: 'center',
+    backgroundColor: 'rgba(34, 197, 94, 0.1)',
+    borderRadius: 12,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+  },
+  heroScoreLabel: {
+    color: '#9ca3af',
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  heroScoreValue: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginTop: 1,
+  },
+  heroScoreHighlightValue: {
+    color: '#22c55e',
+    fontSize: 22,
+    fontWeight: '900',
+    marginTop: 1,
+  },
+  heroScoreUnit: {
+    color: '#6b7280',
+    fontSize: 9,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+  },
+  heroScoreDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: '#1f3d32',
+  },
+  heroActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 12,
+    width: '100%',
+  },
+  heroActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#0f2920',
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.35)',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+  },
+  heroActionBtnText: {
+    color: '#38bdf8',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  checkinMascotGreeting: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#0a1a15',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(234, 179, 8, 0.3)',
+  },
+  checkinLivingStage: {
+    alignItems: 'center',
+    backgroundColor: '#0a1a15',
+    borderRadius: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.25)',
+  },
+  checkinStageHint: {
+    color: '#9ca3af',
+    fontSize: 11,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginTop: 4,
+  },
 });

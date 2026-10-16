@@ -34,6 +34,19 @@ create table if not exists public.profiles (
   goal_type text not null default 'maintain' check (goal_type in ('maintain', 'fat_loss', 'muscle_gain')),
   weekly_workouts_target int not null default 3 check (weekly_workouts_target between 1 and 14),
   onboarding_completed boolean not null default false,
+  body_fat_pct numeric(4,1) check (body_fat_pct is null or (body_fat_pct between 3 and 70)),
+  muscle_mass_pct numeric(4,1) check (muscle_mass_pct is null or (muscle_mass_pct between 10 and 90)),
+  body_water_pct numeric(4,1) check (body_water_pct is null or (body_water_pct between 20 and 85)),
+  basal_metabolism_kcal int check (basal_metabolism_kcal is null or basal_metabolism_kcal > 0),
+  metabolic_age int check (metabolic_age is null or metabolic_age > 0),
+  avatar_mascot_id text not null default 'tita' check (avatar_mascot_id in ('tita', 'gaia')),
+  waist_cm numeric(4,1) check (waist_cm is null or (waist_cm between 40 and 200)),
+  initial_weight_kg numeric(5,2) check (initial_weight_kg is null or initial_weight_kg > 0),
+  initial_body_fat_pct numeric(4,1) check (initial_body_fat_pct is null or (initial_body_fat_pct between 3 and 70)),
+  initial_waist_cm numeric(4,1) check (initial_waist_cm is null or (initial_waist_cm between 40 and 200)),
+  initial_muscle_mass_pct numeric(4,1) check (initial_muscle_mass_pct is null or (initial_muscle_mass_pct between 5 and 70)),
+  initial_checkin_date date,
+  avatar_customization jsonb default null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -349,7 +362,8 @@ select
   (
     (coalesce(count(distinct ufd.date), 0) * 10) +
     (coalesce(count(distinct ued.date), 0) * 10) +
-    (coalesce(count(distinct uwd.date), 0) * 5)
+    (coalesce(count(distinct uwd.date), 0) * 5) +
+    (case when coalesce(count(distinct ufd.date), 0) >= 5 or coalesce(count(distinct ued.date), 0) >= 5 then 20 else 0 end)
   )::int as total_habit_points
 from public.profiles p
 left join user_food_days ufd on ufd.user_id = p.id
@@ -513,14 +527,53 @@ alter table public.group_members enable row level security;
 alter table public.challenges enable row level security;
 alter table public.streaks enable row level security;
 
+-- HELPER FUNCTIONS FOR RLS (Security Definer to prevent infinite recursion)
+create or replace function public.get_user_group_ids(user_uuid uuid)
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select group_id from public.group_members where user_id = user_uuid;
+$$;
+
+create or replace function public.users_share_group(u1 uuid, u2 uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 
+    from public.group_members gm1
+    join public.group_members gm2 on gm1.group_id = gm2.group_id
+    where gm1.user_id = u1 and gm2.user_id = u2
+  );
+$$;
+
+create or replace function public.can_view_group_exercise_log(target_user_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 
+    from public.group_members gm1
+    join public.group_members gm2 on gm1.group_id = gm2.group_id
+    where gm1.user_id = auth.uid() 
+      and gm2.user_id = target_user_id 
+      and gm2.share_workouts = true
+  );
+$$;
+
 -- PROFILES: Usuário lê e edita o seu; membros do mesmo grupo podem ler nome e foto
 create policy "profiles_select_own" on public.profiles for select using (auth.uid() = id);
 create policy "profiles_select_group_members" on public.profiles for select using (
-  exists (
-    select 1 from public.group_members gm1
-    join public.group_members gm2 on gm1.group_id = gm2.group_id
-    where gm1.user_id = auth.uid() and gm2.user_id = public.profiles.id
-  )
+  public.users_share_group(auth.uid(), id)
 );
 create policy "profiles_update_own" on public.profiles for update using (auth.uid() = id) with check (auth.uid() = id);
 
@@ -557,24 +610,21 @@ create policy "exercises_master_read_all" on public.exercises_master for select 
 -- EXERCISE LOGS: Usuário edita os seus; membros de grupos com permissão podem ver
 create policy "exercise_logs_all_own" on public.exercise_logs for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "exercise_logs_select_group" on public.exercise_logs for select using (
-  exists (
-    select 1 from public.group_members gm1
-    join public.group_members gm2 on gm1.group_id = gm2.group_id
-    where gm1.user_id = auth.uid() 
-      and gm2.user_id = public.exercise_logs.user_id 
-      and gm2.share_workouts = true
-  )
+  public.can_view_group_exercise_log(user_id)
 );
 
--- GROUPS & MEMBERS
-create policy "groups_select_members" on public.groups for select using (
-  exists (select 1 from public.group_members where group_id = public.groups.id and user_id = auth.uid())
+-- GROUPS & MEMBERS: Membros podem ver seus grupos, ou usuários autenticados podem localizar pelo invite_code
+create policy "groups_select_members_or_invite" on public.groups for select using (
+  auth.uid() is not null and (
+    id in (select public.get_user_group_ids(auth.uid()))
+    or invite_code is not null
+  )
 );
 create policy "groups_insert" on public.groups for insert with check (auth.uid() = owner_id);
 create policy "groups_update_owner" on public.groups for update using (auth.uid() = owner_id);
 
 create policy "group_members_select" on public.group_members for select using (
-  exists (select 1 from public.group_members gm where gm.group_id = public.group_members.group_id and gm.user_id = auth.uid())
+  user_id = auth.uid() or group_id in (select public.get_user_group_ids(auth.uid()))
 );
 create policy "group_members_insert" on public.group_members for insert with check (auth.uid() = user_id);
 create policy "group_members_update_own" on public.group_members for update using (auth.uid() = user_id);
@@ -585,7 +635,7 @@ create policy "group_members_delete_own_or_admin" on public.group_members for de
 
 -- CHALLENGES
 create policy "challenges_select" on public.challenges for select using (
-  exists (select 1 from public.group_members where group_id = public.challenges.group_id and user_id = auth.uid())
+  group_id in (select public.get_user_group_ids(auth.uid()))
 );
 
 -- STREAKS: Privado
