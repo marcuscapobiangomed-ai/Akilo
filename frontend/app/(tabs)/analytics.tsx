@@ -118,8 +118,9 @@ export default function Analytics() {
     const unsub5 = dataEvents.on('food_edited', fetchAnalytics);
     const unsub6 = dataEvents.on('targets_updated', fetchAnalytics);
     const unsub7 = dataEvents.on('checkin_logged', fetchAnalytics);
+    const unsub8 = dataEvents.on('profile_updated', fetchAnalytics);
     return () => {
-      unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7();
+      unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8();
     };
   }, [period]);
 

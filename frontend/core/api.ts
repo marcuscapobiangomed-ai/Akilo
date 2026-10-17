@@ -99,20 +99,22 @@ async function executeSupabaseGet(endpoint: string, params?: any): Promise<any> 
     const { data } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
     let profileData: any = data || {};
     try {
-      const [localMascot, localSex, localWaist, localFat, localMuscle, localBirth] = await Promise.all([
+      const [localMascot, localSex, localWaist, localFat, localMuscle, localBirth, localWeight] = await Promise.all([
         AsyncStorage.getItem(`avatar_mascot_${user.id}`),
         AsyncStorage.getItem(`bio_sex_${user.id}`),
         AsyncStorage.getItem(`bio_waist_${user.id}`),
         AsyncStorage.getItem(`bio_fat_${user.id}`),
         AsyncStorage.getItem(`bio_muscle_${user.id}`),
         AsyncStorage.getItem(`birth_date_${user.id}`),
+        AsyncStorage.getItem(`bio_weight_${user.id}`),
       ]);
-      if (localMascot && (!profileData.avatar_mascot_id || profileData.avatar_mascot_id === null)) profileData.avatar_mascot_id = localMascot;
-      if (localSex && (!profileData.sex || profileData.sex === null)) profileData.sex = localSex;
-      if (localWaist && (profileData.waist_cm === undefined || profileData.waist_cm === null)) profileData.waist_cm = parseFloat(localWaist);
-      if (localFat && (profileData.body_fat_pct === undefined || profileData.body_fat_pct === null)) profileData.body_fat_pct = parseFloat(localFat);
-      if (localMuscle && (profileData.muscle_mass_pct === undefined || profileData.muscle_mass_pct === null)) profileData.muscle_mass_pct = parseFloat(localMuscle);
-      if (localBirth && (!profileData.birth_date || profileData.birth_date === null)) profileData.birth_date = localBirth;
+      if (localMascot) profileData.avatar_mascot_id = localMascot;
+      if (localSex) profileData.sex = localSex;
+      if (localWaist) profileData.waist_cm = parseFloat(localWaist);
+      if (localFat) profileData.body_fat_pct = parseFloat(localFat);
+      if (localMuscle) profileData.muscle_mass_pct = parseFloat(localMuscle);
+      if (localBirth) profileData.birth_date = localBirth;
+      if (localWeight) profileData.weight_kg = parseFloat(localWeight);
     } catch {}
     return profileData;
   }
@@ -1051,6 +1053,7 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
       if (checkinRecord.muscle_mass_pct !== null) {
         try { await AsyncStorage.setItem(`bio_muscle_${user!.id}`, String(checkinRecord.muscle_mass_pct)); } catch {}
       }
+      try { await AsyncStorage.setItem(`bio_weight_${user!.id}`, String(weightKg)); } catch {}
       if (body.height_cm) profileUpdates.height_cm = Number(body.height_cm);
       if (body.age) profileUpdates.age = Number(body.age);
 
@@ -1078,6 +1081,9 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
   if (method === 'PUT') {
     // Atualizar Perfil
     if (endpoint === '/api/profile/') {
+      if (body.weight_kg !== undefined && body.weight_kg !== null && !isNaN(Number(body.weight_kg))) {
+        try { await AsyncStorage.setItem(`bio_weight_${user!.id}`, String(body.weight_kg)); } catch {}
+      }
       if (body.avatar_mascot_id) {
         try { await AsyncStorage.setItem(`avatar_mascot_${user!.id}`, body.avatar_mascot_id); } catch {}
       }

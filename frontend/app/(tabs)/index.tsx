@@ -226,8 +226,9 @@ export default function Dashboard() {
     const unsub7 = dataEvents.on('exercise_logged', fetchDashboard);
     const unsub8 = dataEvents.on('checkin_logged', fetchDashboard);
     const unsub9 = dataEvents.on('checkin_skipped', fetchDashboard);
+    const unsub10 = dataEvents.on('profile_updated', fetchDashboard);
     return () => {
-      unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9();
+      unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); unsub10();
     };
   }, []);
 
@@ -1291,7 +1292,7 @@ export default function Dashboard() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a1a15' },
-  scrollContent: { padding: 18, paddingBottom: 100 },
+  scrollContent: { padding: 18, paddingBottom: 115 },
 
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, marginRight: 6 },

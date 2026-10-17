@@ -136,8 +136,13 @@ export default function FoodSearch() {
       const customWithFlag = (res.custom || []).map((f: Food) => ({ ...f, is_custom: true }));
       setResults({ master: res.master || [], custom: customWithFlag });
     } catch (e) {
-      console.error('Erro na busca de alimentos:', e);
-      showToast('Falha ao buscar alimentos', 'error');
+      console.warn('Busca remota offline/indisponível, usando catálogo local:', e);
+      try {
+        const fallbackLocal = await searchFoodsLocal(term, effectiveCat);
+        const master = fallbackLocal.filter((f) => f.source !== 'custom');
+        const custom = fallbackLocal.filter((f) => f.source === 'custom').map((f) => ({ ...f, is_custom: true }));
+        setResults({ master: master as any, custom: custom as any });
+      } catch {}
     } finally {
       setLoading(false);
     }

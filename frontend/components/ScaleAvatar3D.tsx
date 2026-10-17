@@ -108,43 +108,46 @@ function buildPlatform(glowColor: string): THREE.Group {
 }
 
 function applyMorphology(root: THREE.Object3D, m: BodyMorphology): void {
-  const arm = clamp(m.armBulk, 0.8, 1.3);
-  const leg = clamp(m.legBulk, 0.8, 1.25);
-  const torso = clamp(m.torsoWidth, 0.85, 1.25);
-  const belly = clamp(m.bellyVolume, 0.85, 1.2);
-  const waist = clamp(m.waistWidth, 0.85, 1.25);
+  const arm = clamp(m.armBulk, 0.75, 1.45);
+  const leg = clamp(m.legBulk, 0.75, 1.40);
+  const torso = clamp(m.torsoWidth, 0.80, 1.40);
+  const belly = clamp(m.bellyVolume, 0.70, 1.65);
+  const waist = clamp(m.waistWidth, 0.70, 1.45);
 
   root.traverse((o) => {
     if (o instanceof THREE.Bone) {
       if (!o.userData.__baseScale) o.userData.__baseScale = o.scale.clone();
       const base: THREE.Vector3 = o.userData.__baseScale;
       const n = o.name.toLowerCase();
-      let factor = 1;
-      if (/upperarm|lowerarm|hand|clavicle|leftarm|rightarm|leftforearm|rightforearm|lefthand|righthand|shoulder/.test(n)) {
-        factor = arm;
-      } else if (/thigh|calf|foot|ball|upleg|leftleg|rightleg|toebase|toeend/.test(n)) {
-        factor = leg;
-      } else if (/spine_03|spine2|chest|neck/.test(n)) {
-        factor = torso;
-      } else if (/spine_02|spine1/.test(n)) {
-        factor = belly;
-      } else if (/spine_01|spine$|pelvis/.test(n)) {
-        factor = waist;
+      let factorX = 1;
+      let factorZ = 1;
+      let factorY = 1;
+
+      if (/upperarm|lowerarm/.test(n)) {
+        factorX = arm; factorZ = arm;
+      } else if (/thigh|calf/.test(n)) {
+        factorX = leg; factorZ = leg;
+      } else if (/spine_03|chest/.test(n)) {
+        factorX = torso; factorZ = torso;
+      } else if (/spine_02/.test(n)) {
+        factorX = belly; factorZ = belly;
+      } else if (/spine_01|pelvis/.test(n)) {
+        factorX = waist; factorZ = waist;
       }
-      o.scale.copy(base).multiplyScalar(factor);
+      o.scale.set(base.x * factorX, base.y * factorY, base.z * factorZ);
     } else if (o instanceof THREE.Mesh) {
       o.castShadow = true;
       // Variações corporais contínuas por bioimpedância (Shape Keys / Morph Targets)
       if (o.morphTargetInfluences && o.morphTargetDictionary) {
         const dict = o.morphTargetDictionary;
         if ('Fat_Belly' in dict) {
-          o.morphTargetInfluences[dict['Fat_Belly']] = clamp((m.bellyVolume - 0.9) / 0.3, 0, 1);
+          o.morphTargetInfluences[dict['Fat_Belly']] = clamp((m.bellyVolume - 0.95) / 0.45, 0, 1);
         }
         if ('Muscle_Bulk' in dict) {
-          o.morphTargetInfluences[dict['Muscle_Bulk']] = clamp((m.armBulk - 0.9) / 0.35, 0, 1);
+          o.morphTargetInfluences[dict['Muscle_Bulk']] = clamp((m.armBulk - 0.95) / 0.35, 0, 1);
         }
         if ('Slim_Waist' in dict) {
-          o.morphTargetInfluences[dict['Slim_Waist']] = clamp((1.1 - m.waistWidth) / 0.3, 0, 1);
+          o.morphTargetInfluences[dict['Slim_Waist']] = clamp((1.05 - m.waistWidth) / 0.30, 0, 1);
         }
       }
     }
@@ -392,12 +395,12 @@ export function ScaleAvatar3D({
     sceneRef.current = scene;
 
     // Enquadramento de Corpo Inteiro Perfeito (Head-to-Toe) com Respiro Superior Nobre
-    // Modelo altura 1.85m a 2.05m com respiração, postura ereta e balança na base
-    // Câmera Z=5.10 e FOV 35° garante enquadramento de corpo inteiro sem nenhum corte na cabeça ou braços
+    // Modelo altura 1.85m com respiração, postura ereta e balança na base
+    // Câmera Z=5.05 e FOV 34° com alvo em Y=0.92 centraliza perfeitamente o personagem dentro do círculo
     const aspect = viewWidth / viewHeight;
-    const camera = new THREE.PerspectiveCamera(35, aspect, 0.1, 50);
-    camera.position.set(0, 1.06, 5.10);
-    camera.lookAt(0, 1.00, 0);
+    const camera = new THREE.PerspectiveCamera(34, aspect, 0.1, 50);
+    camera.position.set(0, 0.96, 5.05);
+    camera.lookAt(0, 0.92, 0);
 
     // Rig Fotográfico 3-Pontos Estúdio Esportivo
     // 1. Hemisphere Light (Gradiente céu esportivo frio -> piso escuro)
@@ -474,6 +477,8 @@ export function ScaleAvatar3D({
 
       const model = gltf.scene as THREE.Group;
       modelRef.current = model;
+      // Alinha os pés com precisão absoluta sobre o centro da balança circular
+      model.position.set(0, 0, mascotId === 'gaia' ? 0.076 : 0.0875);
       applyMorphology(model, morphology);
       if (customization) {
         applyCustomization(model, customization, mascotId);
@@ -536,6 +541,8 @@ export function ScaleAvatar3D({
       const idleClip = clips.find((c) => c.name === IDLE_CLIP[mascotId]) || clips.find((c) => !/t-?pose/i.test(c.name));
       let mixer: THREE.AnimationMixer | null = null;
       if (idleClip) {
+        // Remove tracks de escala que sobrepõem e anulam a deformação de bioimpedância a 60 FPS
+        idleClip.tracks = idleClip.tracks.filter((t) => !t.name.includes('.scale'));
         mixer = new THREE.AnimationMixer(model);
         mixer.clipAction(idleClip).play();
       }
@@ -555,7 +562,6 @@ export function ScaleAvatar3D({
 
         const inspecting = isInspectingRef.current;
         inspectP.current += ((inspecting ? 1 : 0) - inspectP.current) * Math.min(1, dt * 4);
-        const p = inspectP.current;
 
         const breath = 1 + Math.sin(t * 2) * 0.015 * morphology.bellyVolume;
         bodyGroup.scale.setScalar(heightFactor.current * breath);
@@ -574,26 +580,6 @@ export function ScaleAvatar3D({
           userRotationY.current = charGroup.rotation.y;
         } else {
           charGroup.rotation.y = userRotationY.current;
-        }
-
-        // Modificações nos ossos aplicadas exclusivamente durante inspeção (sem congelar a animação idle)
-        if (p > 0.005) {
-          const head = findBone(model, /head$/i);
-          if (head) {
-            head.rotation.x -= 0.35 * p;
-          }
-          if (mascotId === 'tita') {
-            const la = findBone(model, /leftarm$/i);
-            if (la) {
-              la.rotation.x -= 0.7 * p;
-              la.rotation.z += 0.4 * p;
-            }
-            const ra = findBone(model, /rightarm$/i);
-            if (ra) {
-              ra.rotation.x -= 0.7 * p;
-              ra.rotation.z -= 0.4 * p;
-            }
-          }
         }
 
         if (ledRing) {
