@@ -7,7 +7,9 @@
 import { supabase } from './supabase';
 import { cacheGet, cacheSet, cacheInvalidate, buildCacheKey, enqueue } from './cache';
 import NetInfo from '@react-native-community/netinfo';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { dataEvents } from './dataEvents';
+import { evaluateCheckinDue } from './domain/checkinEngine';
 
 const DEFAULT_TARGETS = {
   calories_target: 2000,
@@ -17,6 +19,7 @@ const DEFAULT_TARGETS = {
   carbs_target_g: 250,
   fats_g_target: 60,
   fats_target_g: 60,
+  saturated_fats_target_g: 20,
   fiber_g_target: 28,
   fiber_target_g: 28,
   water_target_ml: 2500,
@@ -35,24 +38,31 @@ const checkOnline = async (): Promise<boolean> => {
 
 const INVALIDATION_MAP: Record<string, string[]> = {
   '/api/food/log': ['/api/food/log', '/api/analytics/daily', '/api/analytics/weekly', '/api/food/recent'],
+  '/api/food/repeat-meal': ['/api/food/log', '/api/analytics/daily', '/api/analytics/weekly', '/api/food/recent'],
   '/api/water/': ['/api/water/', '/api/analytics/daily', '/api/analytics/weekly'],
-  '/api/weight/': ['/api/weight/', '/api/analytics/daily', '/api/analytics/weekly'],
+  '/api/weight/': ['/api/weight/', '/api/analytics/daily', '/api/analytics/weekly', '/api/checkin/status'],
   '/api/exercises/': ['/api/exercises/log', '/api/analytics/daily', '/api/analytics/weekly'],
   '/api/food/favorites': ['/api/food/favorites'],
   '/api/food/custom': ['/api/food/custom', '/api/food/search'],
-  '/api/profile/': ['/api/profile/', '/api/analytics/daily'],
+  '/api/groups/': ['/api/groups/my', '/api/groups/leaderboard'],
+  '/api/profile/': ['/api/profile/', '/api/analytics/daily', '/api/checkin/status', '/api/checkin/comparison'],
   '/api/profile/targets': ['/api/profile/targets', '/api/analytics/daily', '/api/analytics/weekly'],
+  '/api/checkin/': ['/api/checkin/status', '/api/checkin/comparison', '/api/checkin/history', '/api/profile/', '/api/weight/', '/api/analytics/daily', '/api/analytics/weekly', '/api/groups/leaderboard'],
 };
 
 const EVENT_MAP: Record<string, string[]> = {
   '/api/food/log': ['food_logged'],
+  '/api/food/repeat-meal': ['food_logged'],
   '/api/water/': ['water_logged'],
   '/api/weight/': ['weight_logged'],
   '/api/exercises/': ['exercise_logged'],
   '/api/food/custom': ['food_logged'],
   '/api/food/favorites': ['food_logged'],
+  '/api/groups/': ['group_updated'],
   '/api/profile/': ['profile_updated'],
   '/api/profile/targets': ['targets_updated'],
+  '/api/checkin/skip': ['checkin_skipped'],
+  '/api/checkin/log': ['checkin_logged', 'weight_logged', 'profile_updated'],
 };
 
 const emitEvents = (endpoint: string, method: string) => {
@@ -87,7 +97,24 @@ async function executeSupabaseGet(endpoint: string, params?: any): Promise<any> 
   if (endpoint === '/api/profile/') {
     if (!user) return {};
     const { data } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
-    return data || {};
+    let profileData: any = data || {};
+    try {
+      const [localMascot, localSex, localWaist, localFat, localMuscle, localBirth] = await Promise.all([
+        AsyncStorage.getItem(`avatar_mascot_${user.id}`),
+        AsyncStorage.getItem(`bio_sex_${user.id}`),
+        AsyncStorage.getItem(`bio_waist_${user.id}`),
+        AsyncStorage.getItem(`bio_fat_${user.id}`),
+        AsyncStorage.getItem(`bio_muscle_${user.id}`),
+        AsyncStorage.getItem(`birth_date_${user.id}`),
+      ]);
+      if (localMascot && (!profileData.avatar_mascot_id || profileData.avatar_mascot_id === null)) profileData.avatar_mascot_id = localMascot;
+      if (localSex && (!profileData.sex || profileData.sex === null)) profileData.sex = localSex;
+      if (localWaist && (profileData.waist_cm === undefined || profileData.waist_cm === null)) profileData.waist_cm = parseFloat(localWaist);
+      if (localFat && (profileData.body_fat_pct === undefined || profileData.body_fat_pct === null)) profileData.body_fat_pct = parseFloat(localFat);
+      if (localMuscle && (profileData.muscle_mass_pct === undefined || profileData.muscle_mass_pct === null)) profileData.muscle_mass_pct = parseFloat(localMuscle);
+      if (localBirth && (!profileData.birth_date || profileData.birth_date === null)) profileData.birth_date = localBirth;
+    } catch {}
+    return profileData;
   }
 
   // 2. Metas diárias
@@ -97,29 +124,177 @@ async function executeSupabaseGet(endpoint: string, params?: any): Promise<any> 
     return data || DEFAULT_TARGETS;
   }
 
-  // 3. Busca de Alimentos (TBCA + Custom)
+// Helper gratuito para consulta de produtos industrializados e código de barras (Open Food Facts - ODbL)
+async function fetchOpenFoodFacts(queryOrBarcode: string): Promise<any[]> {
+  try {
+    const clean = queryOrBarcode.trim();
+    if (!clean) return [];
+    const isBarcode = /^\d{8,14}$/.test(clean);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+
+    if (isBarcode) {
+      const url = `https://world.openfoodfacts.org/api/v2/product/${clean}.json`;
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+      if (!res.ok) return [];
+      const json = await res.json();
+      if (json.status !== 1 || !json.product) return [];
+      const p = json.product;
+      const nut = p.nutriments || {};
+      const name = p.product_name_pt || p.product_name || `Produto (${clean})`;
+      const brand = p.brands ? ` (${p.brands})` : '';
+
+      return [{
+        id: `off_${clean}`,
+        name: `${name}${brand}`,
+        calories: Math.round(Number(nut['energy-kcal_100g'] || (nut['energy_100g'] ? nut['energy_100g'] / 4.184 : 0)) || 0),
+        protein_g: Math.round(Number(nut.proteins_100g || 0) * 10) / 10,
+        carbs_g: Math.round(Number(nut.carbohydrates_100g || 0) * 10) / 10,
+        fats_g: Math.round(Number(nut.fat_100g || 0) * 10) / 10,
+        saturated_fats_g: Math.round(Number(nut['saturated-fat_100g'] || 0) * 10) / 10,
+        monounsaturated_fats_g: Math.round(Number(nut['monounsaturated-fat_100g'] || 0) * 10) / 10,
+        polyunsaturated_fats_g: Math.round(Number(nut['polyunsaturated-fat_100g'] || 0) * 10) / 10,
+        trans_fats_g: Math.round(Number(nut['trans-fat_100g'] || 0) * 10) / 10,
+        cholesterol_mg: Math.round(Number(nut['cholesterol_100g'] ? nut['cholesterol_100g'] * 1000 : 0)),
+        fiber_g: Math.round(Number(nut.fiber_100g || 0) * 10) / 10,
+        sodium_mg: Math.round(Number(nut.sodium_100g ? nut.sodium_100g * 1000 : (nut.salt_100g ? (nut.salt_100g / 2.5) * 1000 : 0))),
+        base_qty: 100,
+        unit_type: 'g',
+        category: 'Industrializados',
+        source: 'openfoodfacts',
+        is_custom: false,
+        nova_group: Number(p.nova_group || nut['nova-group'] || 4),
+      }];
+    } else {
+      const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(clean)}&search_simple=1&action=process&json=1&page_size=6`;
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+      if (!res.ok) return [];
+      const json = await res.json();
+      const products = json.products || [];
+      return products
+        .filter((p: any) => (p.product_name || p.product_name_pt) && p.nutriments)
+        .map((p: any) => {
+          const nut = p.nutriments || {};
+          const name = p.product_name_pt || p.product_name;
+          const brand = p.brands ? ` (${p.brands})` : '';
+          return {
+            id: `off_${p.code || Math.random().toString(36).substring(7)}`,
+            name: `${name}${brand}`,
+            calories: Math.round(Number(nut['energy-kcal_100g'] || (nut['energy_100g'] ? nut['energy_100g'] / 4.184 : 0)) || 0),
+            protein_g: Math.round(Number(nut.proteins_100g || 0) * 10) / 10,
+            carbs_g: Math.round(Number(nut.carbohydrates_100g || 0) * 10) / 10,
+            fats_g: Math.round(Number(nut.fat_100g || 0) * 10) / 10,
+            saturated_fats_g: Math.round(Number(nut['saturated-fat_100g'] || 0) * 10) / 10,
+            monounsaturated_fats_g: Math.round(Number(nut['monounsaturated-fat_100g'] || 0) * 10) / 10,
+            polyunsaturated_fats_g: Math.round(Number(nut['polyunsaturated-fat_100g'] || 0) * 10) / 10,
+            trans_fats_g: Math.round(Number(nut['trans-fat_100g'] || 0) * 10) / 10,
+            cholesterol_mg: Math.round(Number(nut['cholesterol_100g'] ? nut['cholesterol_100g'] * 1000 : 0)),
+            fiber_g: Math.round(Number(nut.fiber_100g || 0) * 10) / 10,
+            sodium_mg: Math.round(Number(nut.sodium_100g ? nut.sodium_100g * 1000 : (nut.salt_100g ? (nut.salt_100g / 2.5) * 1000 : 0))),
+            base_qty: 100,
+            unit_type: 'g',
+            category: 'Industrializados',
+            source: 'openfoodfacts',
+            is_custom: false,
+            nova_group: Number(p.nova_group || nut['nova-group'] || 4),
+          };
+        });
+    }
+  } catch {
+    return [];
+  }
+}
+
+  // 3. Busca de Alimentos Inteligente (TBCA + TACO + Custom + Suplementos + Open Food Facts)
   if (endpoint === '/api/food/search') {
     const q = (params?.q || '').trim();
-    let masterQuery = supabase
-      .from('foods_master')
-      .select('id, name, brand, unit_type, base_qty, serving_description, calories, protein_g, carbs_g, fats_g, fiber_g, sodium_mg, source, source_id, is_incomplete')
-      .order('calories', { ascending: false })
-      .limit(30);
+    const category = (params?.category || '').trim();
 
-    if (q) {
-      masterQuery = masterQuery.ilike('name', `%${q}%`);
+    // Se o usuário digitou ou colou um código de barras direto (8 a 14 dígitos numéricos)
+    if (/^\d{8,14}$/.test(q)) {
+      const barcodeFoods = await fetchOpenFoodFacts(q);
+      if (barcodeFoods.length > 0) {
+        return { master: barcodeFoods, custom: [] };
+      }
     }
 
-    const { data: masterData } = await masterQuery;
+    let masterData: any[] = [];
+
+    // Tentativa 1: RPC PostgreSQL search_foods_v2 com ranking de relevância
+    if (q || category) {
+      try {
+        const { data: rpcData, error: rpcErr } = await supabase.rpc('search_foods_v2', {
+          search_term: q,
+          p_limit: 40,
+          p_category: category || null,
+        });
+        if (!rpcErr && rpcData && rpcData.length > 0) {
+          masterData = rpcData;
+        }
+      } catch {
+        // Fallback silencioso para consulta direta
+      }
+    }
+
+    // Tentativa 2: Consulta direta com ordenação inteligente por relevância (sem order by calories desc!)
+    if (masterData.length === 0) {
+      let masterQuery = supabase
+        .from('foods_master')
+        .select('*')
+        .limit(40);
+
+      if (category) {
+        masterQuery = masterQuery.ilike('category', `%${category}%`);
+      }
+
+      if (q) {
+        masterQuery = masterQuery.ilike('name', `%${q}%`);
+      }
+
+      const { data } = await masterQuery;
+      let raw = data || [];
+
+      // Ordenação inteligente: 1) Começa com o termo; 2) Fonte pura (TACO/Verified); 3) Nome mais curto
+      if (q) {
+        const qLower = q.toLowerCase();
+        raw.sort((a: any, b: any) => {
+          const aName = (a.name || '').toLowerCase();
+          const bName = (b.name || '').toLowerCase();
+          const aStarts = aName.startsWith(qLower) ? 1 : 0;
+          const bStarts = bName.startsWith(qLower) ? 1 : 0;
+          if (aStarts !== bStarts) return bStarts - aStarts;
+
+          const aPure = (a.source === 'taco' || a.source === 'verified') ? 1 : 0;
+          const bPure = (b.source === 'taco' || b.source === 'verified') ? 1 : 0;
+          if (aPure !== bPure) return bPure - aPure;
+
+          return aName.length - bName.length;
+        });
+      }
+      masterData = raw;
+    }
 
     let customData: any[] = [];
     if (user) {
       let customQuery = supabase.from('foods_custom').select('*').eq('user_id', user.id).limit(30);
+      if (category) {
+        customQuery = customQuery.ilike('category', `%${category}%`);
+      }
       if (q) {
         customQuery = customQuery.ilike('name', `%${q}%`);
       }
       const { data } = await customQuery;
       customData = (data || []).map((f) => ({ ...f, is_custom: true }));
+    }
+
+    // Fallback gracioso Open Food Facts se não houver registros suficientes no banco local para termo longo
+    if (masterData.length === 0 && customData.length === 0 && q.length >= 3 && category !== 'Pratos Brasileiros') {
+      const offFoods = await fetchOpenFoodFacts(q);
+      if (offFoods.length > 0) {
+        masterData = offFoods;
+      }
     }
 
     return { master: masterData || [], custom: customData };
@@ -269,6 +444,11 @@ async function executeSupabaseGet(endpoint: string, params?: any): Promise<any> 
     const totalProtein = foodData.reduce((acc, f) => acc + Number(f.protein_g || 0), 0);
     const totalCarbs = foodData.reduce((acc, f) => acc + Number(f.carbs_g || 0), 0);
     const totalFats = foodData.reduce((acc, f) => acc + Number(f.fats_g || 0), 0);
+    const totalSatFats = foodData.reduce((acc, f) => acc + Number(f.saturated_fats_g || 0), 0);
+    const totalMonoFats = foodData.reduce((acc, f) => acc + Number(f.monounsaturated_fats_g || 0), 0);
+    const totalPolyFats = foodData.reduce((acc, f) => acc + Number(f.polyunsaturated_fats_g || 0), 0);
+    const totalTransFats = foodData.reduce((acc, f) => acc + Number(f.trans_fats_g || 0), 0);
+    const totalCholesterol = foodData.reduce((acc, f) => acc + Number(f.cholesterol_mg || 0), 0);
     const totalFiber = foodData.reduce((acc, f) => acc + Number(f.fiber_g || 0), 0);
     const totalWater = waterData.reduce((acc, w) => acc + Number(w.amount_ml || 0), 0);
     const totalExerciseMinutes = exerciseData.reduce((acc, e) => acc + Number(e.duration_minutes || 0), 0);
@@ -280,6 +460,11 @@ async function executeSupabaseGet(endpoint: string, params?: any): Promise<any> 
         protein: Math.round(totalProtein * 10) / 10,
         carbs: Math.round(totalCarbs * 10) / 10,
         fats: Math.round(totalFats * 10) / 10,
+        saturated_fats: Math.round(totalSatFats * 10) / 10,
+        monounsaturated_fats: Math.round(totalMonoFats * 10) / 10,
+        polyunsaturated_fats: Math.round(totalPolyFats * 10) / 10,
+        trans_fats: Math.round(totalTransFats * 100) / 100,
+        cholesterol: Math.round(totalCholesterol * 10) / 10,
         fiber: Math.round(totalFiber * 10) / 10,
         water: totalWater,
         exerciseMinutes: totalExerciseMinutes,
@@ -333,6 +518,11 @@ async function executeSupabaseGet(endpoint: string, params?: any): Promise<any> 
           protein: dayFoods.reduce((acc, f) => acc + Number(f.protein_g || 0), 0),
           carbs: dayFoods.reduce((acc, f) => acc + Number(f.carbs_g || 0), 0),
           fats: dayFoods.reduce((acc, f) => acc + Number(f.fats_g || 0), 0),
+          saturated_fats: dayFoods.reduce((acc, f) => acc + Number(f.saturated_fats_g || 0), 0),
+          monounsaturated_fats: dayFoods.reduce((acc, f) => acc + Number(f.monounsaturated_fats_g || 0), 0),
+          polyunsaturated_fats: dayFoods.reduce((acc, f) => acc + Number(f.polyunsaturated_fats_g || 0), 0),
+          trans_fats: dayFoods.reduce((acc, f) => acc + Number(f.trans_fats_g || 0), 0),
+          cholesterol: dayFoods.reduce((acc, f) => acc + Number(f.cholesterol_mg || 0), 0),
           fiber: dayFoods.reduce((acc, f) => acc + Number(f.fiber_g || 0), 0),
           water: dayWaters.reduce((acc, w) => acc + Number(w.amount_ml || 0), 0),
           exerciseMinutes: dayExercises.reduce((acc, e) => acc + Number(e.duration_minutes || 0), 0),
@@ -397,6 +587,239 @@ async function executeSupabaseGet(endpoint: string, params?: any): Promise<any> 
     return data || [];
   }
 
+  // 15. Status do Check-in Periódico (Bioimpedância & Peso)
+  if (endpoint === '/api/checkin/status') {
+    if (!user) {
+      return {
+        isDue: false,
+        reason: 'already_done',
+        daysSinceLastCheckin: 0,
+        nextDueDateFormatted: '',
+        badgeLabel: '',
+        profile: null,
+      };
+    }
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('id, name, age, height_cm, weight_kg, body_fat_pct, muscle_mass_pct, body_water_pct, basal_metabolism_kcal, metabolic_age, checkin_frequency_days, preferred_checkin_weekday, last_checkin_date, last_skipped_checkin_date')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    const status = evaluateCheckinDue({
+      lastCheckinDate: profile?.last_checkin_date,
+      lastSkippedDate: profile?.last_skipped_checkin_date,
+      frequencyDays: profile?.checkin_frequency_days || 7,
+      preferredWeekday: profile?.preferred_checkin_weekday ?? 1,
+    });
+
+    return {
+      ...status,
+      profile: profile || null,
+    };
+  }
+
+  // 16. Comparativo Completo de Bioimpedância (Primeira vs Última)
+  if (endpoint === '/api/checkin/comparison') {
+    if (!user) {
+      return {
+        firstBio: null,
+        latestBio: null,
+        deltas: { weightDeltaKg: 0, fatDeltaPct: null, muscleDeltaPct: null, waistDeltaCm: null },
+        status: 'baseline',
+        feedback: 'Sem registros de bioimpedância ainda.',
+        hasHistory: false,
+      };
+    }
+
+    try {
+      // 1. Busca perfil para linha de base inicial
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      // 2. Busca primeiro e último check-ins cadastrados
+      const [firstCheckinRes, latestCheckinRes] = await Promise.all([
+        supabase
+          .from('body_checkins')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('date', { ascending: true })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from('body_checkins')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('date', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]);
+
+      const firstCheckin = firstCheckinRes.data;
+      const latestCheckin = latestCheckinRes.data;
+
+      // Monta Primeiro Registro (Marco Zero)
+      const firstWeight = Number(firstCheckin?.weight_kg || profile?.initial_weight_kg || profile?.weight_kg || 0);
+      const firstFat = firstCheckin?.body_fat_pct !== undefined && firstCheckin?.body_fat_pct !== null
+        ? Number(firstCheckin.body_fat_pct)
+        : (profile?.initial_body_fat_pct !== undefined && profile?.initial_body_fat_pct !== null ? Number(profile.initial_body_fat_pct) : (profile?.body_fat_pct ? Number(profile.body_fat_pct) : null));
+      const firstMuscle = firstCheckin?.muscle_mass_pct !== undefined && firstCheckin?.muscle_mass_pct !== null
+        ? Number(firstCheckin.muscle_mass_pct)
+        : (profile?.initial_muscle_mass_pct !== undefined && profile?.initial_muscle_mass_pct !== null ? Number(profile.initial_muscle_mass_pct) : (profile?.muscle_mass_pct ? Number(profile.muscle_mass_pct) : null));
+      const firstWaist = firstCheckin?.waist_cm !== undefined && firstCheckin?.waist_cm !== null
+        ? Number(firstCheckin.waist_cm)
+        : (profile?.initial_waist_cm !== undefined && profile?.initial_waist_cm !== null ? Number(profile.initial_waist_cm) : (profile?.waist_cm ? Number(profile.waist_cm) : null));
+      const firstDate = firstCheckin?.date || profile?.initial_checkin_date || profile?.created_at?.split('T')[0] || 'Início';
+
+      // Monta Último Registro (Atual)
+      const latestWeight = Number(latestCheckin?.weight_kg || profile?.weight_kg || firstWeight);
+      const latestFat = latestCheckin?.body_fat_pct !== undefined && latestCheckin?.body_fat_pct !== null
+        ? Number(latestCheckin.body_fat_pct)
+        : (profile?.body_fat_pct !== undefined && profile?.body_fat_pct !== null ? Number(profile.body_fat_pct) : null);
+      const latestMuscle = latestCheckin?.muscle_mass_pct !== undefined && latestCheckin?.muscle_mass_pct !== null
+        ? Number(latestCheckin.muscle_mass_pct)
+        : (profile?.muscle_mass_pct !== undefined && profile?.muscle_mass_pct !== null ? Number(profile.muscle_mass_pct) : null);
+      const latestWaist = latestCheckin?.waist_cm !== undefined && latestCheckin?.waist_cm !== null
+        ? Number(latestCheckin.waist_cm)
+        : (profile?.waist_cm !== undefined && profile?.waist_cm !== null ? Number(profile.waist_cm) : null);
+      const latestDate = latestCheckin?.date || profile?.last_checkin_date || 'Hoje';
+
+      // Deltas
+      const weightDeltaKg = Math.round((latestWeight - firstWeight) * 10) / 10;
+      const fatDeltaPct = (latestFat !== null && firstFat !== null) ? Math.round((latestFat - firstFat) * 10) / 10 : null;
+      const muscleDeltaPct = (latestMuscle !== null && firstMuscle !== null) ? Math.round((latestMuscle - firstMuscle) * 10) / 10 : null;
+      const waistDeltaCm = (latestWaist !== null && firstWaist !== null) ? Math.round((latestWaist - firstWaist) * 10) / 10 : null;
+
+      // Classificação Clínica do Progresso (Identifica Flacidez/Catabolismo vs Ganho Magro vs Emagrecimento Saudável)
+      let status: 'great_progress' | 'hypertrophy' | 'muscle_loss_alert' | 'fat_gain_alert' | 'baseline' = 'baseline';
+      let feedback = '';
+
+      const hasHistory = (firstCheckin && latestCheckin && firstCheckin.id !== latestCheckin.id) ||
+                         (profile?.initial_weight_kg && Math.abs(profile.initial_weight_kg - (profile.weight_kg || 0)) >= 0.3);
+
+      if (!hasHistory) {
+        status = 'baseline';
+        feedback = 'Seu mascote está calibrado no Marco Zero da sua jornada. A cada nova pesagem na balança, ele atualizará sua silhueta!';
+      } else if (weightDeltaKg < 0 && ((fatDeltaPct !== null && fatDeltaPct > 0.5) || (muscleDeltaPct !== null && muscleDeltaPct < -1.2))) {
+        // Alerta de Falso Magro / Flacidez: perdeu peso, mas perdeu massa muscular ou reteve gordura (alimentação desbalanceada / doces)
+        status = 'muscle_loss_alert';
+        feedback = `Atenção: o peso caiu ${Math.abs(weightDeltaKg)} kg, mas houve perda de músculo ou retenção de gordura! Seu mascote indica flacidez: capriche em proteínas e treino de força!`;
+      } else if (muscleDeltaPct !== null && muscleDeltaPct > 0.8 && (fatDeltaPct === null || fatDeltaPct <= 0.8)) {
+        status = 'hypertrophy';
+        feedback = `Evolução Campeã! Ganho de +${muscleDeltaPct}% de massa muscular! Seu mascote está mais denso, forte e com bíceps destacados!`;
+      } else if (weightDeltaKg < 0 && (fatDeltaPct === null || fatDeltaPct <= 0)) {
+        status = 'great_progress';
+        const waistText = waistDeltaCm && waistDeltaCm < 0 ? ` e menos ${Math.abs(waistDeltaCm)} cm de cintura` : '';
+        feedback = `Excelente queima de gordura! Menos ${Math.abs(weightDeltaKg)} kg na balança${waistText}! Sua silhueta está mais enxuta e definida!`;
+      } else if (weightDeltaKg > 1.5 && fatDeltaPct !== null && fatDeltaPct > 1.0) {
+        status = 'fat_gain_alert';
+        feedback = `A balança subiu +${weightDeltaKg} kg e a gordura aumentou +${fatDeltaPct}%. Seu mascote está no Modo Treino Pesado: hora de focar no déficit calórico!`;
+      } else {
+        status = 'baseline';
+        feedback = `Composição estável. Siga consistente na dieta e hidratação para desbloquear a próxima fase!`;
+      }
+
+      return {
+        firstBio: {
+          date: firstDate,
+          weightKg: firstWeight,
+          bodyFatPct: firstFat,
+          muscleMassPct: firstMuscle,
+          waistCm: firstWaist,
+        },
+        latestBio: {
+          date: latestDate,
+          weightKg: latestWeight,
+          bodyFatPct: latestFat,
+          muscleMassPct: latestMuscle,
+          waistCm: latestWaist,
+        },
+        deltas: {
+          weightDeltaKg,
+          fatDeltaPct,
+          muscleDeltaPct,
+          waistDeltaCm,
+        },
+        status,
+        feedback,
+        hasHistory,
+      };
+    } catch (e) {
+      console.warn('Erro ao processar comparativo de bioimpedância:', e);
+      return {
+        firstBio: null,
+        latestBio: null,
+        deltas: { weightDeltaKg: 0, fatDeltaPct: null, muscleDeltaPct: null, waistDeltaCm: null },
+        status: 'baseline',
+        feedback: 'Dados iniciais carregados.',
+        hasHistory: false,
+      };
+    }
+  }
+
+  // 17. Histórico Completo de Bioimpedância & Composição Corporal
+  if (endpoint === '/api/checkin/history') {
+    if (!user) return { records: [], profile: { sex: 'female', height_cm: 170, waistThreshold: 88 } };
+
+    const [checkinsRes, profileRes] = await Promise.all([
+      supabase
+        .from('body_checkins')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('date', { ascending: true }),
+      supabase
+        .from('profiles')
+        .select('sex, height_cm, initial_weight_kg, initial_body_fat_pct, initial_muscle_mass_pct, initial_waist_cm, initial_checkin_date, created_at')
+        .eq('id', user.id)
+        .maybeSingle(),
+    ]);
+
+    const profileData: any = profileRes.data || {};
+    const sex = profileData.sex || 'female';
+    const waistThreshold = sex === 'male' ? 102 : 88;
+
+    const rawRecords = checkinsRes.data || [];
+    const formattedRecords: any[] = [];
+
+    // Se houver baseline no profile e nenhum checkin com essa data inicial, insere o marco zero
+    const firstCheckinDate = rawRecords[0]?.date;
+    const initialDate = profileData.initial_checkin_date || profileData.created_at?.split('T')[0];
+    if (initialDate && (!firstCheckinDate || initialDate < firstCheckinDate) && profileData.initial_weight_kg) {
+      formattedRecords.push({
+        date: initialDate,
+        weight_kg: Number(profileData.initial_weight_kg),
+        body_fat_pct: profileData.initial_body_fat_pct ? Number(profileData.initial_body_fat_pct) : null,
+        muscle_mass_pct: profileData.initial_muscle_mass_pct ? Number(profileData.initial_muscle_mass_pct) : null,
+        waist_cm: profileData.initial_waist_cm ? Number(profileData.initial_waist_cm) : null,
+        is_baseline: true,
+      });
+    }
+
+    for (const r of rawRecords) {
+      formattedRecords.push({
+        date: r.date,
+        weight_kg: Number(r.weight_kg),
+        body_fat_pct: r.body_fat_pct !== null && r.body_fat_pct !== undefined ? Number(r.body_fat_pct) : null,
+        muscle_mass_pct: r.muscle_mass_pct !== null && r.muscle_mass_pct !== undefined ? Number(r.muscle_mass_pct) : null,
+        waist_cm: r.waist_cm !== null && r.waist_cm !== undefined ? Number(r.waist_cm) : null,
+        visceral_fat: r.visceral_fat !== null && r.visceral_fat !== undefined ? Number(r.visceral_fat) : null,
+        metabolic_age: r.metabolic_age !== null && r.metabolic_age !== undefined ? Number(r.metabolic_age) : null,
+      });
+    }
+
+    return {
+      records: formattedRecords,
+      profile: {
+        sex,
+        height_cm: Number(profileData.height_cm || 170),
+        waistThreshold,
+      },
+    };
+  }
+
   return null;
 }
 
@@ -424,7 +847,7 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
       const { sourceDate, targetDate, mealType } = body;
       const { data: prevLogs, error: fetchErr } = await supabase
         .from('food_logs')
-        .select('meal_type, food_source, food_master_id, food_custom_id, food_name, brand, qty, unit_type, calories, protein_g, carbs_g, fats_g, fiber_g, sodium_mg')
+        .select('meal_type, food_source, food_master_id, food_custom_id, food_name, brand, qty, unit_type, calories, protein_g, carbs_g, fats_g, saturated_fats_g, fiber_g, sodium_mg, nova_group')
         .eq('user_id', user!.id)
         .eq('date', sourceDate)
         .eq('meal_type', mealType);
@@ -559,18 +982,166 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
 
       return { success: true, group: targetGroup };
     }
+
+    // Pular / Adiar Check-in de Bioimpedância
+    if (endpoint === '/api/checkin/skip') {
+      const today = new Date().toISOString().split('T')[0];
+      const { data, error } = await supabase
+        .from('profiles')
+        .update({ last_skipped_checkin_date: today })
+        .eq('id', user!.id)
+        .select()
+        .single();
+      if (error) throw error;
+      return { skipped: true, date: today, profile: data };
+    }
+
+    // Registrar Check-in Oficial de Bioimpedância & Peso (+15 pts no grupo)
+    if (endpoint === '/api/checkin/log') {
+      const today = body?.date || new Date().toISOString().split('T')[0];
+      const weightKg = Number(body?.weight_kg);
+
+      if (!weightKg || isNaN(weightKg) || weightKg <= 0) {
+        throw new Error('Peso em kg inválido para check-in.');
+      }
+
+      // 1. Inserir ou atualizar em body_checkins (com tolerância se tabela ainda não criada)
+      const checkinRecord: any = {
+        user_id: user!.id,
+        date: today,
+        weight_kg: weightKg,
+        bmi: body.bmi ? Number(body.bmi) : null,
+        body_fat_pct: body.body_fat_pct !== undefined && body.body_fat_pct !== null && body.body_fat_pct !== '' ? Number(body.body_fat_pct) : null,
+        muscle_mass_pct: body.muscle_mass_pct !== undefined && body.muscle_mass_pct !== null && body.muscle_mass_pct !== '' ? Number(body.muscle_mass_pct) : null,
+        body_water_pct: body.body_water_pct !== undefined && body.body_water_pct !== null && body.body_water_pct !== '' ? Number(body.body_water_pct) : null,
+        basal_metabolism_kcal: body.basal_metabolism_kcal ? parseInt(body.basal_metabolism_kcal, 10) : null,
+        metabolic_age: body.metabolic_age ? parseInt(body.metabolic_age, 10) : null,
+        waist_cm: body.waist_cm !== undefined && body.waist_cm !== null && body.waist_cm !== '' ? Number(body.waist_cm) : null,
+        notes: body.notes || null,
+      };
+
+      let savedCheckin: any = null;
+      try {
+        const { data, error } = await supabase
+          .from('body_checkins')
+          .upsert(checkinRecord, { onConflict: 'user_id,date' })
+          .select()
+          .maybeSingle();
+        if (!error) savedCheckin = data;
+      } catch (e) {
+        console.warn('[Checkin] Falha na tabela body_checkins (prosseguindo com perfil):', e);
+      }
+
+      // 2. Atualizar perfil com os novos dados corporais e data de último check-in
+      const profileUpdates: any = {
+        last_checkin_date: today,
+        weight_kg: weightKg,
+      };
+      if (checkinRecord.body_fat_pct !== null) profileUpdates.body_fat_pct = checkinRecord.body_fat_pct;
+      if (checkinRecord.muscle_mass_pct !== null) profileUpdates.muscle_mass_pct = checkinRecord.muscle_mass_pct;
+      if (checkinRecord.body_water_pct !== null) profileUpdates.body_water_pct = checkinRecord.body_water_pct;
+      if (checkinRecord.basal_metabolism_kcal !== null) profileUpdates.basal_metabolism_kcal = checkinRecord.basal_metabolism_kcal;
+      if (checkinRecord.waist_cm !== null) {
+        profileUpdates.waist_cm = checkinRecord.waist_cm;
+        try { await AsyncStorage.setItem(`bio_waist_${user!.id}`, String(checkinRecord.waist_cm)); } catch {}
+      }
+      if (checkinRecord.body_fat_pct !== null) {
+        try { await AsyncStorage.setItem(`bio_fat_${user!.id}`, String(checkinRecord.body_fat_pct)); } catch {}
+      }
+      if (checkinRecord.muscle_mass_pct !== null) {
+        try { await AsyncStorage.setItem(`bio_muscle_${user!.id}`, String(checkinRecord.muscle_mass_pct)); } catch {}
+      }
+      if (body.height_cm) profileUpdates.height_cm = Number(body.height_cm);
+      if (body.age) profileUpdates.age = Number(body.age);
+
+      try {
+        await supabase
+          .from('profiles')
+          .update(profileUpdates)
+          .eq('id', user!.id);
+      } catch (err: any) {
+        if (profileUpdates.waist_cm) {
+          delete profileUpdates.waist_cm;
+          await supabase.from('profiles').update(profileUpdates).eq('id', user!.id);
+        }
+      }
+
+      // 3. Registrar no histórico de peso (weight_logs) para alimentar os gráficos
+      await supabase
+        .from('weight_logs')
+        .upsert({ user_id: user!.id, date: today, weight_kg: weightKg }, { onConflict: 'user_id,date' });
+
+      return { success: true, checkin: savedCheckin || checkinRecord };
+    }
   }
 
   if (method === 'PUT') {
     // Atualizar Perfil
     if (endpoint === '/api/profile/') {
-      const { data, error } = await supabase
+      if (body.avatar_mascot_id) {
+        try { await AsyncStorage.setItem(`avatar_mascot_${user!.id}`, body.avatar_mascot_id); } catch {}
+      }
+      if (body.sex) {
+        try { await AsyncStorage.setItem(`bio_sex_${user!.id}`, body.sex); } catch {}
+      }
+      if (body.waist_cm !== undefined && body.waist_cm !== null) {
+        try { await AsyncStorage.setItem(`bio_waist_${user!.id}`, String(body.waist_cm)); } catch {}
+      }
+      if (body.body_fat_pct !== undefined && body.body_fat_pct !== null) {
+        try { await AsyncStorage.setItem(`bio_fat_${user!.id}`, String(body.body_fat_pct)); } catch {}
+      }
+      if (body.muscle_mass_pct !== undefined && body.muscle_mass_pct !== null) {
+        try { await AsyncStorage.setItem(`bio_muscle_${user!.id}`, String(body.muscle_mass_pct)); } catch {}
+      }
+      if (body.birth_date) {
+        try { await AsyncStorage.setItem(`birth_date_${user!.id}`, body.birth_date); } catch {}
+      }
+
+      // Sincroniza também no user_metadata do auth para backup de conta
+      try {
+        await supabase.auth.updateUser({
+          data: {
+            name: body.name || undefined,
+            sex: body.sex || undefined,
+            birth_date: body.birth_date || undefined,
+            avatar_mascot_id: body.avatar_mascot_id || undefined,
+            waist_cm: body.waist_cm || undefined,
+            body_fat_pct: body.body_fat_pct || undefined,
+            muscle_mass_pct: body.muscle_mass_pct || undefined,
+          }
+        });
+      } catch {}
+
+      let payload = { ...body };
+      let { data, error } = await supabase
         .from('profiles')
-        .update(body)
+        .update(payload)
         .eq('id', user!.id)
         .select()
         .single();
-      if (error) throw error;
+
+      // Tolerância se as novas colunas ainda não foram migradas no Supabase remoto
+      if (error && (error.message?.includes('avatar_mascot_id') || error.message?.includes('waist_cm') || error.message?.includes('initial_') || error.message?.includes('birth_date') || error.message?.includes('body_fat_pct') || error.message?.includes('muscle_mass_pct') || error.message?.includes('sex'))) {
+        delete payload.avatar_mascot_id;
+        delete payload.waist_cm;
+        delete payload.initial_weight_kg;
+        delete payload.initial_body_fat_pct;
+        delete payload.initial_waist_cm;
+        delete payload.birth_date;
+        delete payload.body_fat_pct;
+        delete payload.muscle_mass_pct;
+        delete payload.sex;
+        const retry = await supabase
+          .from('profiles')
+          .update(payload)
+          .eq('id', user!.id)
+          .select()
+          .single();
+        if (retry.error) throw retry.error;
+        data = { ...retry.data, ...body };
+      } else if (error) {
+        throw error;
+      }
       return data;
     }
 

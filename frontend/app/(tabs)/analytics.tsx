@@ -1,4 +1,4 @@
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, Dimensions } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, Dimensions, Share } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '../../core/api';
@@ -15,12 +15,17 @@ import {
   CheckCircle2, 
   Lightbulb, 
   Dumbbell, 
-  Info 
+  Info,
+  Share2,
+  Heart,
+  ShieldCheck
 } from 'lucide-react-native';
 import { AnalyticsSkeleton } from '../../components/SkeletonLoader';
 import { dataEvents } from '../../core/dataEvents';
 import { analyzeWeightTrend, explainDailyFluctuation, WeightRecord } from '../../core/domain/trendsEngine';
 import { generateSmartInsights, UserContext, Insight } from '../../core/domain/insightsEngine';
+import { evaluateLipidProfile, LipidProfileEvaluation } from '../../core/domain/nutritionEngine';
+import { soundHaptics } from '../../core/soundHaptics';
 
 const { width } = Dimensions.get('window');
 
@@ -39,11 +44,34 @@ export default function Analytics() {
   const [streak, setStreak] = useState({ current_streak: 0, best_streak: 0 });
   const [weightLogs, setWeightLogs] = useState<any[]>([]);
   const [exerciseLogs, setExerciseLogs] = useState<any[]>([]);
+  const [bioHistory, setBioHistory] = useState<{
+    records: Array<{
+      date: string;
+      weight_kg: number;
+      body_fat_pct: number | null;
+      muscle_mass_pct: number | null;
+      waist_cm: number | null;
+      visceral_fat?: number | null;
+      metabolic_age?: number | null;
+    }>;
+    profile: {
+      sex: 'male' | 'female';
+      height_cm: number;
+      waistThreshold: number;
+    };
+  }>({
+    records: [],
+    profile: { sex: 'female', height_cm: 170, waistThreshold: 88 },
+  });
+  const [bioTab, setBioTab] = useState<'tissues' | 'waist'>('tissues');
 
   const fetchAnalytics = async () => {
     try {
       const days = period === 'weekly' ? 7 : 30;
-      const res = await api.get('/api/analytics/weekly', { days });
+      const [res, bioRes] = await Promise.all([
+        api.get('/api/analytics/weekly', { days }),
+        api.get('/api/checkin/history'),
+      ]);
 
       if (res) {
         const dailyData = Array.isArray(res) ? res : (res.data || []);
@@ -59,6 +87,10 @@ export default function Analytics() {
         if (res.streak) setStreak(res.streak);
         if (res.weight_logs) setWeightLogs(res.weight_logs);
         if (res.exercises) setExerciseLogs(res.exercises);
+      }
+
+      if (bioRes && Array.isArray(bioRes.records)) {
+        setBioHistory(bioRes);
       }
     } catch (e) {
       console.error('Analytics fetch error:', e);
@@ -85,8 +117,9 @@ export default function Analytics() {
     const unsub4 = dataEvents.on('weight_logged', fetchAnalytics);
     const unsub5 = dataEvents.on('food_edited', fetchAnalytics);
     const unsub6 = dataEvents.on('targets_updated', fetchAnalytics);
+    const unsub7 = dataEvents.on('checkin_logged', fetchAnalytics);
     return () => {
-      unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6();
+      unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7();
     };
   }, [period]);
 
@@ -114,6 +147,23 @@ export default function Analytics() {
   const totalWorkouts = exerciseLogs.length;
   const totalExerciseMinutes = exerciseLogs.reduce((acc, e) => acc + Number(e.duration_minutes || 0), 0);
 
+  // Perfil Lipídico Agregado (Médias diárias)
+  const avgFats = data.length > 0 ? Math.round(data.reduce((s, d) => s + getVal(d, 'fats'), 0) / data.length) : 0;
+  const avgSaturatedFats = data.length > 0 ? Math.round((data.reduce((s, d) => s + getVal(d, 'saturated_fats'), 0) / data.length) * 10) / 10 : 0;
+  const avgMonoFats = data.length > 0 ? Math.round((data.reduce((s, d) => s + getVal(d, 'monounsaturated_fats'), 0) / data.length) * 10) / 10 : 0;
+  const avgPolyFats = data.length > 0 ? Math.round((data.reduce((s, d) => s + getVal(d, 'polyunsaturated_fats'), 0) / data.length) * 10) / 10 : 0;
+  const avgTransFats = data.length > 0 ? Math.round((data.reduce((s, d) => s + getVal(d, 'trans_fats'), 0) / data.length) * 10) / 10 : 0;
+  const avgCholesterol = data.length > 0 ? Math.round(data.reduce((s, d) => s + getVal(d, 'cholesterol'), 0) / data.length) : 0;
+
+  const lipidEvaluation: LipidProfileEvaluation = evaluateLipidProfile(
+    avgFats,
+    avgSaturatedFats,
+    avgMonoFats,
+    avgPolyFats,
+    avgTransFats,
+    avgCalories
+  );
+
   // Montar contexto e disparar o motor de insights inteligentes
   const userContext: UserContext = {
     daysLoggedPast7d: daysWithFood,
@@ -131,6 +181,31 @@ export default function Analytics() {
   };
 
   const smartInsights: Insight[] = generateSmartInsights(userContext);
+
+  const handleShareWeeklyReport = async () => {
+    try {
+      const topTip = smartInsights[0]?.actionableTip || 'Mantenha a consistência nos registros diários!';
+      const weightSummary = trendAnalysis.isSufficientData 
+        ? `• Média Móvel de Peso (7d): ${trendAnalysis.movingAverage7d} kg (${trendAnalysis.weeklyRateKg !== null && trendAnalysis.weeklyRateKg < 0 ? 'evolução de ' + Math.abs(trendAnalysis.weeklyRateKg) + ' kg/sem' : 'em acompanhamento'})`
+        : `• Peso Atual: ${trendAnalysis.currentWeight ? trendAnalysis.currentWeight + ' kg' : 'Em fase de acúmulo de pesagens'}`;
+
+      const message = `📊 Meu Relatório Semanal de Hábitos & Saúde:\n\n` +
+        `🔥 Dias Registrados: ${daysWithFood}/7 dias\n` +
+        `🥗 Média Calórica: ${avgCalories} kcal/dia (Meta: ${target} kcal)\n` +
+        `🌾 Média de Fibras: ${avgFiber}g/dia (Meta: ${fiberTarget}g)\n` +
+        `🥩 Média de Proteínas: ${avgProtein}g/dia (Meta: ${proteinTarget}g)\n` +
+        `🥑 Gorduras Totais: ${avgFats}g/dia (Saturada: ${avgSaturatedFats}g, ${lipidEvaluation.saturatedCaloriesPercentage}% do VET)\n` +
+        `💧 Hidratação Média: ${(avgWater / 1000).toFixed(1)} L/dia\n` +
+        `🏋️ Atividade Física: ${totalWorkouts} treinos (${totalExerciseMinutes} min)\n` +
+        `${weightSummary}\n\n` +
+        `💡 Recomendação: ${topTip}\n\n` +
+        `Registrado com foco no Batalha da Balança ⚔️⚖️`;
+
+      await Share.share({ message });
+    } catch (e) {
+      console.error('Erro ao compartilhar relatório semanal:', e);
+    }
+  };
 
   // Gráfico de Calorias
   const chartData = data.slice(-7).map((d) => {
@@ -168,6 +243,102 @@ export default function Analytics() {
     textColor: '#a855f7',
     textFontSize: 10,
   }));
+
+  // Preparação de dados de Composição Corporal e Bioimpedância Clínica
+  const bioRecords = bioHistory.records || [];
+  const recordsWithComposition = bioRecords.filter(
+    (r) => r.body_fat_pct !== null && r.muscle_mass_pct !== null
+  );
+  const recordsWithWaist = bioRecords.filter((r) => r.waist_cm !== null && (r.waist_cm || 0) > 0);
+
+  const fatChartData = recordsWithComposition.map((r) => ({
+    value: Number(r.body_fat_pct) || 0,
+    dataPointText: `${r.body_fat_pct}%`,
+    textShiftY: -8,
+    textColor: '#f59e0b',
+    textFontSize: 9,
+    label: r.date ? r.date.slice(5) : '',
+    labelTextStyle: { color: '#9ca3af', fontSize: 9 },
+  }));
+
+  const muscleChartData = recordsWithComposition.map((r) => ({
+    value: Number(r.muscle_mass_pct) || 0,
+    dataPointText: `${r.muscle_mass_pct}%`,
+    textShiftY: 10,
+    textColor: '#22c55e',
+    textFontSize: 9,
+  }));
+
+  const waistChartData = recordsWithWaist.map((r) => ({
+    value: Number(r.waist_cm) || 0,
+    dataPointText: `${r.waist_cm}cm`,
+    textShiftY: -8,
+    textColor: '#38bdf8',
+    textFontSize: 9,
+    label: r.date ? r.date.slice(5) : '',
+    labelTextStyle: { color: '#9ca3af', fontSize: 9 },
+  }));
+
+  const latestBio = bioRecords[bioRecords.length - 1];
+  const firstBio = bioRecords[0];
+
+  const fatDelta =
+    latestBio?.body_fat_pct !== null &&
+    latestBio?.body_fat_pct !== undefined &&
+    firstBio?.body_fat_pct !== null &&
+    firstBio?.body_fat_pct !== undefined
+      ? Math.round((latestBio.body_fat_pct - firstBio.body_fat_pct) * 10) / 10
+      : null;
+
+  const muscleDelta =
+    latestBio?.muscle_mass_pct !== null &&
+    latestBio?.muscle_mass_pct !== undefined &&
+    firstBio?.muscle_mass_pct !== null &&
+    firstBio?.muscle_mass_pct !== undefined
+      ? Math.round((latestBio.muscle_mass_pct - firstBio.muscle_mass_pct) * 10) / 10
+      : null;
+
+  const waistDelta =
+    latestBio?.waist_cm !== null &&
+    latestBio?.waist_cm !== undefined &&
+    firstBio?.waist_cm !== null &&
+    firstBio?.waist_cm !== undefined
+      ? Math.round((latestBio.waist_cm - firstBio.waist_cm) * 10) / 10
+      : null;
+
+  let recompositionStatus: { label: string; color: string; desc: string } = {
+    label: 'Marco Zero',
+    color: '#38bdf8',
+    desc: 'Cadastre suas pesagens periódicas na balança para acompanhar a queima de gordura e ganho magro.',
+  };
+
+  if (fatDelta !== null && muscleDelta !== null && bioRecords.length >= 2) {
+    if (muscleDelta >= 0.6 && fatDelta <= 0.5) {
+      recompositionStatus = {
+        label: '🏆 Hipertrofia & Força',
+        color: '#22c55e',
+        desc: `Ganho de +${muscleDelta}% de massa muscular preservando gordura. Shape denso e forte!`,
+      };
+    } else if (fatDelta < 0 && muscleDelta >= -0.4) {
+      recompositionStatus = {
+        label: '🟢 Queima Efetiva',
+        color: '#22c55e',
+        desc: `Redução de ${Math.abs(fatDelta)}% de gordura corporal com preservação de massa muscular!`,
+      };
+    } else if (fatDelta > 0.5 && muscleDelta < -0.8) {
+      recompositionStatus = {
+        label: '⚠️ Alerta de Flacidez',
+        color: '#ef4444',
+        desc: 'Perda muscular detectada com aumento adiposo. Aumente proteínas e treinos de força!',
+      };
+    } else {
+      recompositionStatus = {
+        label: '⚖️ Estabilidade Tecidual',
+        color: '#38bdf8',
+        desc: 'Composição corporal em equilíbrio sustentável. Mantenha os treinos e hidratação!',
+      };
+    }
+  }
 
   const isOnTrack = avgCalories >= target * 0.8 && avgCalories <= target * 1.15;
   const maxCalorieValue = Math.max(...chartData.map((d) => d.value), target);
@@ -407,6 +578,193 @@ export default function Analytics() {
           </View>
         </View>
 
+        {/* NOVO CARD: COMPOSIÇÃO CORPORAL & BIOIMPEDÂNCIA CLÍNICA */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <View style={styles.cardTitleGroup}>
+              <View style={[styles.cardIcon, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}>
+                <Scale color="#f59e0b" size={20} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>Composição Corporal & Bioimpedância</Text>
+                <Text style={styles.cardSubtitle}>Massa Magra vs. Tecido Adiposo Subcutâneo</Text>
+              </View>
+            </View>
+
+            {/* Tag de Recomposição */}
+            <View style={[styles.lipidStatusBadge, { backgroundColor: `${recompositionStatus.color}20`, borderColor: recompositionStatus.color }]}>
+              <Text style={[styles.lipidStatusText, { color: recompositionStatus.color }]}>
+                {recompositionStatus.label}
+              </Text>
+            </View>
+          </View>
+
+          {/* Seletor de Abas Bioimpedância: Tecidos vs Cintura */}
+          <View style={styles.bioTabRow}>
+            <TouchableOpacity
+              style={[styles.bioTabBtn, bioTab === 'tissues' && styles.bioTabBtnActive]}
+              onPress={() => {
+                soundHaptics.triggerLightTap();
+                setBioTab('tissues');
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.bioTabBtnText, bioTab === 'tissues' && styles.bioTabBtnTextActive]}>
+                Curva de Tecidos (% Gordura / Músculo)
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.bioTabBtn, bioTab === 'waist' && styles.bioTabBtnActive]}
+              onPress={() => {
+                soundHaptics.triggerLightTap();
+                setBioTab('waist');
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.bioTabBtnText, bioTab === 'waist' && styles.bioTabBtnTextActive]}>
+                Circunferência de Cintura (cm)
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Métricas Rápidas */}
+          <View style={styles.bioMetricsRow}>
+            <View style={styles.bioMetricCol}>
+              <Text style={styles.bioMetricLabel}>% GORDURA</Text>
+              <Text style={[styles.bioMetricVal, { color: '#f59e0b' }]}>
+                {latestBio?.body_fat_pct !== null && latestBio?.body_fat_pct !== undefined ? `${latestBio.body_fat_pct}%` : '--'}
+              </Text>
+              <Text style={[styles.bioMetricDelta, { color: (fatDelta || 0) <= 0 ? '#22c55e' : '#ef4444' }]}>
+                {fatDelta !== null ? `${fatDelta > 0 ? '+' : ''}${fatDelta}%` : 'Marco Zero'}
+              </Text>
+            </View>
+
+            <View style={styles.bioMetricDivider} />
+
+            <View style={styles.bioMetricCol}>
+              <Text style={styles.bioMetricLabel}>% MÚSCULO</Text>
+              <Text style={[styles.bioMetricVal, { color: '#22c55e' }]}>
+                {latestBio?.muscle_mass_pct !== null && latestBio?.muscle_mass_pct !== undefined ? `${latestBio.muscle_mass_pct}%` : '--'}
+              </Text>
+              <Text style={[styles.bioMetricDelta, { color: (muscleDelta || 0) >= 0 ? '#22c55e' : '#ef4444' }]}>
+                {muscleDelta !== null ? `${muscleDelta > 0 ? '+' : ''}${muscleDelta}%` : 'Marco Zero'}
+              </Text>
+            </View>
+
+            <View style={styles.bioMetricDivider} />
+
+            <View style={styles.bioMetricCol}>
+              <Text style={styles.bioMetricLabel}>CINTURA</Text>
+              <Text style={[styles.bioMetricVal, { color: '#38bdf8' }]}>
+                {latestBio?.waist_cm !== null && latestBio?.waist_cm !== undefined ? `${latestBio.waist_cm} cm` : '--'}
+              </Text>
+              <Text style={[styles.bioMetricDelta, { color: (waistDelta || 0) <= 0 ? '#22c55e' : '#ef4444' }]}>
+                {waistDelta !== null ? `${waistDelta > 0 ? '+' : ''}${waistDelta} cm` : 'Marco Zero'}
+              </Text>
+            </View>
+          </View>
+
+          {/* Gráfico de Linhas */}
+          {bioTab === 'tissues' ? (
+            <View style={styles.weightChartArea}>
+              {fatChartData.length >= 2 ? (
+                <>
+                  <View style={styles.chartLegendRow}>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendDot, { backgroundColor: '#f59e0b' }]} />
+                      <Text style={styles.legendText}>Gordura (%)</Text>
+                    </View>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendDot, { backgroundColor: '#22c55e' }]} />
+                      <Text style={styles.legendText}>Massa Muscular (%)</Text>
+                    </View>
+                  </View>
+
+                  <LineChart
+                    data={fatChartData}
+                    data2={muscleChartData}
+                    width={width - 80}
+                    height={130}
+                    color="#f59e0b"
+                    color2="#22c55e"
+                    thickness={3}
+                    thickness2={3}
+                    dataPointsColor="#f59e0b"
+                    dataPointsColor2="#22c55e"
+                    dataPointsRadius={4}
+                    dataPointsRadius2={4}
+                    curved
+                    hideRules
+                    hideYAxisText={false}
+                    yAxisTextStyle={{ color: '#9ca3af', fontSize: 10 }}
+                    yAxisColor="transparent"
+                    xAxisColor="rgba(255,255,255,0.1)"
+                    spacing={Math.max(40, (width - 100) / Math.max(1, fatChartData.length))}
+                    initialSpacing={16}
+                  />
+                </>
+              ) : (
+                <View style={styles.emptyStateSmall}>
+                  <Text style={styles.emptyTextSmall}>
+                    Faça pelo menos 2 check-ins de bioimpedância no Perfil para ver a curva comparativa de tecidos.
+                  </Text>
+                </View>
+              )}
+            </View>
+          ) : (
+            <View style={styles.weightChartArea}>
+              {waistChartData.length >= 2 ? (
+                <>
+                  <View style={styles.chartLegendRow}>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendDot, { backgroundColor: '#38bdf8' }]} />
+                      <Text style={styles.legendText}>Cintura (cm)</Text>
+                    </View>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendDot, { backgroundColor: '#ef4444' }]} />
+                      <Text style={styles.legendText}>Limite SBC ({bioHistory.profile.waistThreshold}cm)</Text>
+                    </View>
+                  </View>
+
+                  <LineChart
+                    data={waistChartData}
+                    width={width - 80}
+                    height={130}
+                    color="#38bdf8"
+                    thickness={3}
+                    dataPointsColor="#38bdf8"
+                    dataPointsRadius={4}
+                    curved
+                    hideRules
+                    hideYAxisText={false}
+                    yAxisTextStyle={{ color: '#9ca3af', fontSize: 10 }}
+                    yAxisColor="transparent"
+                    xAxisColor="rgba(255,255,255,0.1)"
+                    spacing={Math.max(40, (width - 100) / Math.max(1, waistChartData.length))}
+                    initialSpacing={16}
+                    showReferenceLine1
+                    referenceLine1Position={bioHistory.profile.waistThreshold}
+                    referenceLine1Config={{ color: '#ef444480', dashWidth: 4, dashGap: 4 }}
+                  />
+                </>
+              ) : (
+                <View style={styles.emptyStateSmall}>
+                  <Text style={styles.emptyTextSmall}>
+                    Registre a circunferência de cintura no check-in para acompanhar a evolução das suas medidas.
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* Feedback Clínico da Recomposição */}
+          <View style={[styles.fluctuationAlertBox, { backgroundColor: 'rgba(15, 23, 42, 0.6)', borderColor: 'rgba(56, 189, 248, 0.2)' }]}>
+            <Info color="#38bdf8" size={15} />
+            <Text style={styles.fluctuationAlertText}>{recompositionStatus.desc}</Text>
+          </View>
+        </View>
+
         {/* SEÇÃO DE INSIGHTS INTELIGENTES DETERMINÍSTICOS (insightsEngine) */}
         <View style={styles.sectionHeader}>
           <View style={styles.sectionTitleGroup}>
@@ -568,6 +926,137 @@ export default function Analytics() {
           </Text>
         </View>
 
+        {/* CARD DE PERFIL LIPÍDICO & SAÚDE CARDIOVASCULAR (OMS / SBC) */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <View style={styles.cardTitleGroup}>
+              <View style={[styles.cardIcon, { backgroundColor: 'rgba(234, 179, 8, 0.15)' }]}>
+                <Heart color="#eab308" size={20} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>Qualidade Lipídica & Coração</Text>
+                <Text style={styles.cardSubtitle}>
+                  Diretriz OMS: Saturadas &lt; 10% das calorias
+                </Text>
+              </View>
+            </View>
+            <View
+              style={[
+                styles.lipidStatusBadge,
+                lipidEvaluation.status === 'excellent' || lipidEvaluation.status === 'balanced'
+                  ? styles.statusGreen
+                  : styles.statusOrange,
+              ]}
+            >
+              <ShieldCheck
+                color={
+                  lipidEvaluation.status === 'excellent' || lipidEvaluation.status === 'balanced'
+                    ? '#22c55e'
+                    : '#f97316'
+                }
+                size={14}
+              />
+              <Text
+                style={[
+                  styles.lipidStatusText,
+                  {
+                    color:
+                      lipidEvaluation.status === 'excellent' || lipidEvaluation.status === 'balanced'
+                        ? '#22c55e'
+                        : '#f97316',
+                  },
+                ]}
+              >
+                {lipidEvaluation.status === 'excellent'
+                  ? 'Cardioprotetor'
+                  : lipidEvaluation.status === 'trans_alert'
+                  ? 'Alerta Trans'
+                  : lipidEvaluation.isSaturatedExcessive
+                  ? 'Ajustar Saturada'
+                  : 'Equilibrado'}
+              </Text>
+            </View>
+          </View>
+
+          {/* Grid das 4 Métricas Lipídicas */}
+          <View style={styles.lipidMetricsGrid}>
+            {/* Gorduras Boas (Mono + Poli) */}
+            <View style={styles.lipidMetricItem}>
+              <Text style={styles.lipidMetricLabel}>Gorduras Boas</Text>
+              <Text style={[styles.lipidMetricValue, { color: '#22c55e' }]}>
+                {lipidEvaluation.goodFats_g}g
+              </Text>
+              <Text style={styles.lipidMetricSub}>
+                {lipidEvaluation.goodFatsRatio}% do total
+              </Text>
+            </View>
+
+            {/* Gordura Saturada */}
+            <View style={styles.lipidMetricItem}>
+              <Text style={styles.lipidMetricLabel}>Gord. Saturada</Text>
+              <Text
+                style={[
+                  styles.lipidMetricValue,
+                  { color: lipidEvaluation.isSaturatedExcessive ? '#f97316' : '#ffffff' },
+                ]}
+              >
+                {avgSaturatedFats}g
+              </Text>
+              <Text
+                style={[
+                  styles.lipidMetricSub,
+                  { color: lipidEvaluation.isSaturatedExcessive ? '#f97316' : '#9ca3af' },
+                ]}
+              >
+                {lipidEvaluation.saturatedCaloriesPercentage}% do VET (máx 10%)
+              </Text>
+            </View>
+
+            {/* Gordura Trans */}
+            <View style={styles.lipidMetricItem}>
+              <Text style={styles.lipidMetricLabel}>Gordura Trans</Text>
+              <Text
+                style={[
+                  styles.lipidMetricValue,
+                  { color: avgTransFats > 0.1 ? '#ef4444' : '#22c55e' },
+                ]}
+              >
+                {avgTransFats}g
+              </Text>
+              <Text style={styles.lipidMetricSub}>
+                {avgTransFats > 0.1 ? 'Evitar consumo' : 'Livre de Trans'}
+              </Text>
+            </View>
+
+            {/* Colesterol */}
+            <View style={styles.lipidMetricItem}>
+              <Text style={styles.lipidMetricLabel}>Colesterol</Text>
+              <Text style={styles.lipidMetricValue}>{avgCholesterol}mg</Text>
+              <Text style={styles.lipidMetricSub}>Média diária</Text>
+            </View>
+          </View>
+
+          {/* Banner de Recomendação Clínica */}
+          <View
+            style={[
+              styles.lipidAdviceBox,
+              lipidEvaluation.status === 'trans_alert' || lipidEvaluation.isSaturatedExcessive
+                ? styles.lipidAdviceBoxWarning
+                : styles.lipidAdviceBoxSuccess,
+            ]}
+          >
+            <Info
+              color={
+                lipidEvaluation.status === 'trans_alert' || lipidEvaluation.isSaturatedExcessive
+                  ? '#f59e0b'
+                  : '#22c55e'
+              }
+              size={15}
+            />
+            <Text style={styles.lipidAdviceText}>{lipidEvaluation.message}</Text>
+          </View>
+        </View>
+
         {/* Resumo da Semana */}
         <View style={styles.summaryCard}>
           <Text style={styles.summaryTitle}>Balanço Nutricional Semanal</Text>
@@ -582,6 +1071,10 @@ export default function Analytics() {
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Média de proteínas</Text>
             <Text style={styles.summaryValue}>{avgProtein}g / dia</Text>
+          </View>
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>Média de gorduras</Text>
+            <Text style={styles.summaryValue}>{avgFats}g / dia (Sat: {avgSaturatedFats}g)</Text>
           </View>
 
           <View style={styles.progressContainer}>
@@ -599,6 +1092,16 @@ export default function Analytics() {
               ? `${Math.round((avgCalories / target) * 100)}% da sua meta calórica diária`
               : 'Registre suas refeições para ver o resumo completo.'}
           </Text>
+
+          {/* Botão de Compartilhar Relatório Semanal */}
+          <TouchableOpacity
+            style={styles.shareReportButton}
+            onPress={handleShareWeeklyReport}
+            activeOpacity={0.8}
+          >
+            <Share2 color="#22c55e" size={16} />
+            <Text style={styles.shareReportText}>Compartilhar Relatório Semanal</Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -608,6 +1111,23 @@ export default function Analytics() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a1a15' },
   scrollContent: { padding: 20, paddingBottom: 120 },
+  shareReportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 16,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(34, 197, 94, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.3)',
+  },
+  shareReportText: {
+    color: '#22c55e',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
 
   // Cabeçalho
   header: { marginBottom: 20 },
@@ -720,4 +1240,108 @@ const styles = StyleSheet.create({
   tooltipText: { color: '#ffffff', fontSize: 12, fontWeight: '600' },
   tooltipSmall: { backgroundColor: '#0c4a6e', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginBottom: 4 },
   tooltipTextSmall: { color: '#ffffff', fontSize: 11, fontWeight: '500' },
+
+  // Perfil Lipídico
+  lipidStatusBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16 },
+  lipidStatusText: { fontSize: 12, fontWeight: '700' },
+  lipidMetricsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 12 },
+  lipidMetricItem: { flex: 1, minWidth: '45%', backgroundColor: 'rgba(0,0,0,0.25)', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
+  lipidMetricLabel: { color: '#9ca3af', fontSize: 11, fontWeight: '600', marginBottom: 4 },
+  lipidMetricValue: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' },
+  lipidMetricSub: { color: '#6b7280', fontSize: 10, marginTop: 2 },
+  lipidAdviceBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: 12, padding: 12, borderWidth: 1 },
+  lipidAdviceBoxSuccess: { backgroundColor: 'rgba(34, 197, 94, 0.08)', borderColor: 'rgba(34, 197, 94, 0.25)' },
+  lipidAdviceBoxWarning: { backgroundColor: 'rgba(245, 158, 11, 0.08)', borderColor: 'rgba(245, 158, 11, 0.25)' },
+  lipidAdviceText: { color: '#e5e7eb', fontSize: 12, lineHeight: 17, flex: 1 },
+
+  // Abas e Métricas de Bioimpedância
+  bioTabRow: {
+    flexDirection: 'row',
+    backgroundColor: '#0a1a15',
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 16,
+    gap: 6,
+  },
+  bioTabBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bioTabBtnActive: {
+    backgroundColor: '#133527',
+  },
+  bioTabBtnText: {
+    color: '#9ca3af',
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  bioTabBtnTextActive: {
+    color: '#22c55e',
+    fontWeight: 'bold',
+  },
+  bioMetricsRow: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(0,0,0,0.25)',
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+  },
+  bioMetricCol: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  bioMetricLabel: {
+    color: '#9ca3af',
+    fontSize: 10,
+    fontWeight: '700',
+    marginBottom: 2,
+    letterSpacing: 0.5,
+  },
+  bioMetricVal: {
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 2,
+  },
+  bioMetricDelta: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  bioMetricDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  chartLegendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+    marginBottom: 12,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  legendText: {
+    color: '#9ca3af',
+    fontSize: 11,
+    fontWeight: '600',
+  },
 });
+

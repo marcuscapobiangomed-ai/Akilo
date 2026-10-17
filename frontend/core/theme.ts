@@ -1,4 +1,4 @@
-// Theme system for Akilo app - 3 color schemes
+// Theme system for Batalha da Balança app - 3 color schemes
 
 export type ThemeColors = {
   // Backgrounds

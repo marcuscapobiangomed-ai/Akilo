@@ -1,6 +1,5 @@
-
 import React, { useEffect, useRef } from 'react';
-import { View, Text, Animated, StyleSheet } from 'react-native';
+import { View, Text, Animated, StyleSheet, Platform } from 'react-native';
 import { useNetwork } from '../core/network';
 import { WifiOff } from 'lucide-react-native';
 
@@ -11,22 +10,25 @@ export const OfflineBanner = () => {
   useEffect(() => {
     Animated.spring(slideAnim, {
       toValue: isOnline ? -60 : 0,
-      useNativeDriver: true,
+      useNativeDriver: Platform.OS !== 'web',
       tension: 80,
       friction: 12,
     }).start();
   }, [isOnline]);
 
+  if (isOnline) return null;
+
   return (
     <Animated.View style={[styles.banner, { transform: [{ translateY: slideAnim }] }]}>
       <WifiOff color="#fbbf24" size={16} />
       <Text style={styles.text}>
-        You're offline
-        {pendingCount > 0 ? ` • ${pendingCount} change${pendingCount > 1 ? 's' : ''} pending` : ' • changes will sync automatically'}
+        Você está offline
+        {pendingCount > 0 ? ` • ${pendingCount} alteraç${pendingCount > 1 ? 'ões' : 'ão'} pendente${pendingCount > 1 ? 's' : ''}` : ' • sincronização automática ativa'}
       </Text>
     </Animated.View>
   );
 };
+
 const styles = StyleSheet.create({
   banner: {
     position: 'absolute',

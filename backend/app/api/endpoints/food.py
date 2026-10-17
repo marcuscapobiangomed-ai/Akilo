@@ -8,16 +8,36 @@ from app.models.schemas import FoodCreate, FoodLogCreate
 router = APIRouter()
 
 @router.get("/search")
-def search_foods(q: str, client: Client = Depends(get_supabase_client)):
-    """Search for foods in master database and user's custom foods"""
+def search_foods(q: str = "", category: Optional[str] = None, client: Client = Depends(get_supabase_client)):
+    """Search for foods in master database and user's custom foods with smart relevance"""
     try:
-        # Search master foods
-        master = client.table("foods_master").select("*").ilike("name", f"%{q}%").limit(20).execute()
+        q_clean = q.strip()
+        # Try RPC search_foods_v2 first
+        try:
+            rpc_res = client.rpc("search_foods_v2", {
+                "search_term": q_clean,
+                "p_limit": 40,
+                "p_category": category or None
+            }).execute()
+            master_data = rpc_res.data or []
+        except Exception as rpc_err:
+            # Fallback to direct table search
+            query = client.table("foods_master").select("*")
+            if q_clean:
+                query = query.ilike("name", f"%{q_clean}%")
+            if category:
+                query = query.ilike("category", f"%{category}%")
+            master_data = query.limit(40).execute().data or []
         
-        # Search custom foods (RLS filters to user's own)
-        custom = client.table("foods_custom").select("*").ilike("name", f"%{q}%").limit(20).execute()
+        # Search custom foods
+        custom_query = client.table("foods_custom").select("*")
+        if q_clean:
+            custom_query = custom_query.ilike("name", f"%{q_clean}%")
+        if category:
+            custom_query = custom_query.ilike("category", f"%{category}%")
+        custom_data = custom_query.limit(20).execute().data or []
         
-        return {"master": master.data or [], "custom": custom.data or []}
+        return {"master": master_data, "custom": custom_data}
     except Exception as e:
         print(f"Search error: {e}")
         return {"master": [], "custom": []}
@@ -122,6 +142,43 @@ def delete_food_log(id: str, client: Client = Depends(get_supabase_client)):
         return {"deleted": True}
     except Exception as e:
         print(f"Delete food log error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/repeat-meal")
+def repeat_meal(payload: dict, client: Client = Depends(get_supabase_client)):
+    """Clones food entries from a previous date to target date for a meal type"""
+    try:
+        p = client.table("profiles").select("id").single().execute()
+        user_id = p.data['id']
+        source_date = payload.get("sourceDate")
+        target_date = payload.get("targetDate")
+        meal_type = payload.get("mealType")
+
+        prev_logs = client.table("food_logs")\
+            .select("*")\
+            .eq("user_id", user_id)\
+            .eq("date", source_date)\
+            .eq("meal_type", meal_type)\
+            .execute()
+
+        entries = prev_logs.data or []
+        if not entries:
+            return {"cloned": 0}
+
+        new_entries = []
+        for e in entries:
+            copy = dict(e)
+            copy.pop("id", None)
+            copy.pop("created_at", None)
+            copy.pop("updated_at", None)
+            copy["user_id"] = user_id
+            copy["date"] = target_date
+            new_entries.append(copy)
+
+        res = client.table("food_logs").insert(new_entries).execute()
+        return {"cloned": len(res.data or [])}
+    except Exception as e:
+        print(f"Repeat meal error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/favorites/{food_id}")

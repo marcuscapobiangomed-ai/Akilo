@@ -70,3 +70,8 @@ htmlcov/
 *.bak
 data/tbca_raw.jsonl
 
+# Raw intermediate 3D source files and CLI temp
+Universal Base Characters\[Standard\]/
+*.fbx
+white_mesh.glb
+supabase/.temp/

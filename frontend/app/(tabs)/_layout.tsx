@@ -14,7 +14,7 @@ const TabIcon = ({ icon: Icon, label, color, focused }: {
     <View style={styles.iconWrapper}>
       <Icon color={focused ? '#22c55e' : '#6b7280'} size={22} strokeWidth={focused ? 2.5 : 2} />
     </View>
-    <Text style={[
+    <Text numberOfLines={1} style={[
       styles.tabLabel, 
       { color: focused ? '#22c55e' : '#6b7280' },
       focused && styles.tabLabelActive
@@ -110,7 +110,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-    flex: 1,
+    width: 72,
     paddingVertical: 6,
   },
   glowEffect: {
@@ -134,9 +134,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#22c55e',
   },
   tabLabel: {
+    width: 72,
+    textAlign: 'center',
     fontSize: 10,
     fontWeight: '500',
-    letterSpacing: 0.3,
   },
   tabLabelActive: {
     fontWeight: '700',

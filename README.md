@@ -1,7 +1,7 @@
 <div align="center">
-  <img src="frontend/assets/logo.png" alt="Akilo Logo" width="100" />
-  <h1>Akilo</h1>
-  <p><strong>Fitness & Nutrition Tracker</strong></p>
+  <img src="frontend/assets/logo.png" alt="Batalha da Balança Logo" width="100" />
+  <h1>Batalha da Balança</h1>
+  <p><strong>Gamified Healthy Habits, Bioimpedance & Nutrition Tracker</strong></p>
   <p>A open-source mobile app for tracking calories, macros, hydration, and weight — built with React Native and FastAPI.</p>
 
   [![GitHub Stars](https://img.shields.io/github/stars/dutta-sujoy/Akilo?style=for-the-badge&logo=github&color=22c55e&logoColor=white)](https://github.com/dutta-sujoy/Akilo)

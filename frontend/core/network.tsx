@@ -70,9 +70,16 @@ export const NetworkProvider = ({ children }: { children: React.ReactNode }) => 
     // Check initial queue size
     queueSize().then(setPendingCount);
 
+    const checkOnlineStatus = (state: NetInfoState) => {
+      if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {
+        return navigator.onLine;
+      }
+      return !!(state.isConnected && state.isInternetReachable !== false);
+    };
+
     const unsubscribe = NetInfo.addEventListener((state: NetInfoState) => {
-      const online = !!(state.isConnected && state.isInternetReachable !== false);
-      setIsOnline(prev => {
+      const online = checkOnlineStatus(state);
+      setIsOnline((prev) => {
         // Transition from offline → online: flush queue
         if (!prev && online) {
           flushQueue();

@@ -30,7 +30,7 @@ interface FoodLog {
 interface FoodItem {
   id: string;
   name: string;
-  source: 'master' | 'custom';
+  source: 'master' | 'custom' | 'taco' | 'verified';
   calories_per_base: number;
   protein_per_base: number;
   carbs_per_base: number;

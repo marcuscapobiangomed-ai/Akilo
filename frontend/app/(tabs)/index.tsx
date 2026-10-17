@@ -3,7 +3,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { api } from '../../core/api';
 import { useRouter } from 'expo-router';
-import { Plus, Droplets, Scale, X, Flame, Dumbbell, Wheat, Droplet, Sparkles, Activity, Clock, Check, Trophy, Palette, Zap } from 'lucide-react-native';
+import { Plus, Droplets, Scale, X, Flame, Dumbbell, Wheat, Droplet, Sparkles, Activity, Clock, Check, Trophy, Palette, Zap, Bell } from 'lucide-react-native';
 import { supabase } from '../../core/supabase';
 import Svg, { Circle, G } from 'react-native-svg';
 import { useToast } from '../../components/Toast';
@@ -18,6 +18,7 @@ import { getMascotImage } from '../../assets/avatars';
 import { LivingAvatar3D } from '../../components/LivingAvatar3D';
 import { MascotStudioModal } from '../../components/MascotStudioModal';
 import { BioCheckinCeremonyModal } from '../../components/BioCheckinCeremonyModal';
+import { NotificationsModal } from '../../components/NotificationsModal';
 import { evaluateBioReaction, type BioReactionResult } from '../../core/domain/bioReactionEngine';
 import { soundHaptics } from '../../core/soundHaptics';
 
@@ -120,6 +121,7 @@ export default function Dashboard() {
   const [savingExercise, setSavingExercise] = useState(false);
   const [communityModalVisible, setCommunityModalVisible] = useState(false);
   const [mascotStudioVisible, setMascotStudioVisible] = useState(false);
+  const [notificationsModalVisible, setNotificationsModalVisible] = useState(false);
 
   // Estados do Check-in Periódico de Bioimpedância & Peso (+15 pts no grupo)
   const [profile, setProfile] = useState<any>(null);
@@ -557,6 +559,16 @@ export default function Dashboard() {
     customization: profile?.avatar_customization,
   });
 
+  const hasUnreadNotifications = !!(
+    checkinStatus?.isDue ||
+    (summary?.water || 0) < (targets?.water_target_ml || 2500) * 0.4 ||
+    caloriesConsumed === 0
+  );
+  const unreadNotificationsCount =
+    (checkinStatus?.isDue ? 1 : 0) +
+    ((summary?.water || 0) < (targets?.water_target_ml || 2500) * 0.4 ? 1 : 0) +
+    (caloriesConsumed === 0 ? 1 : 0);
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView
@@ -580,114 +592,73 @@ export default function Dashboard() {
               <Flame color="#f97316" size={16} />
               <Text style={styles.streakText}>{streak}</Text>
             </View>
+            <TouchableOpacity
+              style={styles.notificationBtn}
+              onPress={() => {
+                soundHaptics.triggerLightTap();
+                setNotificationsModalVisible(true);
+              }}
+              activeOpacity={0.8}
+              accessibilityLabel="Notificações"
+            >
+              <Bell color="#22c55e" size={18} />
+              {hasUnreadNotifications && (
+                <View style={styles.notificationBadge}>
+                  <Text style={styles.notificationBadgeText}>{unreadNotificationsCount}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
             <TouchableOpacity style={styles.trophyBtn} onPress={() => setCommunityModalVisible(true)}>
               <Trophy color="#eab308" size={18} />
             </TouchableOpacity>
           </View>
         </View>
 
-        {/* Banner do Mascote e Check-in Oficial */}
-        {checkinStatus?.isDue ? (
-          <View style={styles.checkinBanner}>
-            <View style={styles.checkinBannerHeader}>
-              <View style={styles.mascotBannerAvatarWrapper}>
-                <Image 
-                  source={getMascotImage(mascotEval.assetKey)} 
-                  style={{ width: 48, height: 58, borderRadius: 12 }} 
-                  resizeMode="contain" 
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Text style={styles.checkinBannerTitle}>{mascotEval.mascotName}: Hora do Check-in!</Text>
-                  <View style={styles.checkinPointsBadge}>
-                    <Sparkles color="#eab308" size={12} />
-                    <Text style={styles.checkinPointsText}>+15 pts</Text>
-                  </View>
-                </View>
-                <Text style={styles.checkinBannerSubtitle}>
-                  "{mascotEval.flavorQuote}"
-                </Text>
-              </View>
+        {/* 🌟 ARENA HERO: PERSONAGEM 3D CENTRAL & META CALÓRICA INTERATIVA */}
+        <View style={styles.mascotHeroArena}>
+          {/* Barra de Topo do Mascote e Ações Rápidas */}
+          <View style={styles.mascotTopActionBar}>
+            <View style={[styles.heroSpeechBadge, { backgroundColor: `${mascotEval.badgeColor}22`, borderColor: mascotEval.badgeColor }]}>
+              <Sparkles color={mascotEval.badgeColor || '#facc15'} size={12} />
+              <Text style={[styles.heroSpeechSpeaker, { color: mascotEval.badgeColor || '#facc15' }]}>
+                {mascotEval.mascotName} • {mascotEval.badgeLabel}
+              </Text>
             </View>
 
-            <View style={styles.checkinBannerActions}>
-              <TouchableOpacity
-                style={styles.checkinPrimaryBtn}
-                onPress={handleOpenCheckinModal}
+            <View style={{ flexDirection: 'row', gap: 6 }}>
+              <TouchableOpacity 
+                style={[styles.heroCustomizePill, { borderColor: '#22c55e' }]}
+                onPress={() => handleOpenBioCeremony()}
                 activeOpacity={0.8}
               >
-                <Scale color="#0a1a15" size={16} />
-                <Text style={styles.checkinPrimaryBtnText}>Atualizar Medidas Agora</Text>
+                <Zap color="#22c55e" size={12} />
+                <Text style={[styles.heroCustomizePillText, { color: '#22c55e' }]}>Cerimônia</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity
-                style={styles.checkinSkipBtn}
-                onPress={handleSkipCheckin}
-                disabled={skippingCheckin}
+              <TouchableOpacity 
+                style={styles.heroCustomizePill}
+                onPress={() => setMascotStudioVisible(true)}
                 activeOpacity={0.8}
               >
-                <Clock color="#9ca3af" size={15} />
-                <Text style={styles.checkinSkipBtnText}>
-                  {skippingCheckin ? 'Adiado...' : 'Pular verificação'}
-                </Text>
+                <Palette color="#c084fc" size={12} />
+                <Text style={styles.heroCustomizePillText}>Personalizar 3D</Text>
               </TouchableOpacity>
             </View>
           </View>
-        ) : null}
 
-        {/* 🌟 ARENA HERO: PERSONAGEM 3D CENTRAL & META CALÓRICA INTERATIVA */}
-        <View style={styles.mascotHeroArena}>
-          {/* 1. Balão de Fala Dinâmica do Mascote */}
+          {/* Dica / Mensagem Compacta do Mascote */}
           <TouchableOpacity
-            style={styles.heroSpeechBubbleWrapper}
-            activeOpacity={0.88}
+            style={styles.heroSpeechCompactCard}
+            activeOpacity={0.85}
             onPress={() => {
               soundHaptics.triggerMediumTap();
               setHomeMascotInspect(true);
               setTimeout(() => setHomeMascotInspect(false), 4500);
             }}
           >
-            <View style={[styles.heroSpeechBubble, { borderColor: mascotEval.badgeColor || '#facc15' }]}>
-              <View style={styles.heroSpeechHeaderRow}>
-                <View style={[styles.heroSpeechBadge, { backgroundColor: `${mascotEval.badgeColor}25`, borderColor: mascotEval.badgeColor }]}>
-                  <Sparkles color={mascotEval.badgeColor || '#facc15'} size={12} />
-                  <Text style={[styles.heroSpeechSpeaker, { color: mascotEval.badgeColor || '#facc15' }]}>
-                    {mascotEval.mascotName} • {mascotEval.badgeLabel}
-                  </Text>
-                </View>
-
-                <View style={{ flexDirection: 'row', gap: 6 }}>
-                  <TouchableOpacity 
-                    style={[styles.heroCustomizePill, { borderColor: '#22c55e' }]}
-                    onPress={(e) => {
-                      e.stopPropagation?.();
-                      handleOpenBioCeremony();
-                    }}
-                    activeOpacity={0.8}
-                  >
-                    <Zap color="#22c55e" size={12} />
-                    <Text style={[styles.heroCustomizePillText, { color: '#22c55e' }]}>Cerimônia</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity 
-                    style={styles.heroCustomizePill}
-                    onPress={(e) => {
-                      e.stopPropagation?.();
-                      setMascotStudioVisible(true);
-                    }}
-                    activeOpacity={0.8}
-                  >
-                    <Palette color="#c084fc" size={12} />
-                    <Text style={styles.heroCustomizePillText}>Personalizar 3D</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              <Text style={styles.heroSpeechMainText}>{homeSpeech.mainSpeech}</Text>
-              <Text style={styles.heroSpeechSubText}>{homeSpeech.subSpeech}</Text>
-            </View>
-            <View style={[styles.heroSpeechTail, { borderTopColor: mascotEval.badgeColor || '#facc15' }]} />
+            <Text style={styles.heroSpeechCompactText} numberOfLines={2}>
+              "{homeSpeech.mainSpeech}"
+            </Text>
           </TouchableOpacity>
 
           {/* 2. Palco 3D Vivo com Anel Calórico Integrado */}
@@ -696,8 +667,8 @@ export default function Dashboard() {
             <View style={styles.heroProgressHalo}>
               <CircularProgress 
                 progress={calProgress} 
-                size={244} 
-                strokeWidth={10} 
+                size={256} 
+                strokeWidth={9} 
                 color={calProgress > 1 ? '#ef4444' : (mascotEval.badgeColor || '#22c55e')} 
               />
             </View>
@@ -712,7 +683,7 @@ export default function Dashboard() {
                 muscleMassPct={profile?.muscle_mass_pct}
                 morphology={mascotEval.morphology}
                 customization={profile?.avatar_customization}
-                size={205}
+                size={215}
                 simple={false}
                 hideBubble={true}
                 isInspecting={homeMascotInspect}
@@ -1289,6 +1260,31 @@ export default function Dashboard() {
           fetchDashboard();
         }}
       />
+
+      {/* MODAL DE NOTIFICAÇÕES & CHECK-IN */}
+      <NotificationsModal
+        visible={notificationsModalVisible}
+        onClose={() => setNotificationsModalVisible(false)}
+        checkinStatus={checkinStatus}
+        mascotEval={mascotEval}
+        onOpenCheckin={() => {
+          setNotificationsModalVisible(false);
+          handleOpenCheckinModal();
+        }}
+        onSkipCheckin={handleSkipCheckin}
+        skippingCheckin={skippingCheckin}
+        waterCurrent={summary.water || 0}
+        waterTarget={targets?.water_target_ml || targets?.water_ml_target || 2500}
+        onQuickAddWater={(amt) => handleAddWater(amt)}
+        caloriesRemaining={caloriesRemaining}
+        caloriesConsumed={caloriesConsumed}
+        caloriesTarget={caloriesTarget}
+        streak={streak}
+        onOpenCommunity={() => {
+          setNotificationsModalVisible(false);
+          setCommunityModalVisible(true);
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -1502,6 +1498,37 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
   primaryButtonText: { color: '#0a1a15', fontWeight: 'bold', fontSize: 16 },
+
+  // Botão de Notificações no Header
+  notificationBtn: {
+    backgroundColor: 'rgba(34, 197, 94, 0.12)',
+    padding: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  notificationBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: '#ef4444',
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+    borderWidth: 1.5,
+    borderColor: '#0a1a15',
+  },
+  notificationBadgeText: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: '900',
+  },
 
   // Troféu no Header
   trophyBtn: {
@@ -1722,7 +1749,7 @@ const styles = StyleSheet.create({
   mascotHeroArena: {
     backgroundColor: '#0a1a15',
     borderRadius: 24,
-    paddingTop: 16,
+    paddingTop: 14,
     paddingBottom: 18,
     paddingHorizontal: 16,
     marginBottom: 20,
@@ -1735,40 +1762,25 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 4,
   },
-  heroSpeechBubbleWrapper: {
+  mascotTopActionBar: {
     width: '100%',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  heroSpeechBubble: {
-    width: '100%',
-    backgroundColor: '#0f2920',
-    borderRadius: 16,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderWidth: 1.5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-  },
-  heroSpeechHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 4,
+    marginBottom: 8,
+    paddingHorizontal: 2,
   },
   heroSpeechBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
     paddingHorizontal: 8,
-    paddingVertical: 2,
+    paddingVertical: 3,
     borderRadius: 8,
     borderWidth: 1,
   },
   heroSpeechSpeaker: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: 'bold',
   },
   heroCustomizePill: {
@@ -1787,37 +1799,26 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
   },
-  heroSpeechTouchHint: {
-    color: '#9ca3af',
-    fontSize: 10,
-    fontStyle: 'italic',
+  heroSpeechCompactCard: {
+    width: '100%',
+    backgroundColor: 'rgba(15, 41, 32, 0.75)',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.25)',
+    marginBottom: 6,
   },
-  heroSpeechMainText: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: 'bold',
-    lineHeight: 18,
-  },
-  heroSpeechSubText: {
-    color: '#d1fae5',
-    fontSize: 11,
-    lineHeight: 15,
-    marginTop: 3,
-  },
-  heroSpeechTail: {
-    width: 0,
-    height: 0,
-    borderLeftWidth: 7,
-    borderRightWidth: 7,
-    borderTopWidth: 7,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderTopColor: '#facc15',
-    alignSelf: 'center',
+  heroSpeechCompactText: {
+    color: '#e5e7eb',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+    lineHeight: 16,
   },
   heroStageContainer: {
-    width: 260,
-    height: 285,
+    width: 280,
+    height: 330,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',

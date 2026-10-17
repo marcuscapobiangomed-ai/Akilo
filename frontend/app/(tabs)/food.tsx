@@ -14,11 +14,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Slider from '@react-native-community/slider';
 import { api } from '../../core/api';
-import { Plus, X, Search, Heart, Sparkles, Check, AlertCircle } from 'lucide-react-native';
+import { Plus, X, Search, Heart, Sparkles, Check, AlertCircle, ScanBarcode } from 'lucide-react-native';
 import { useToast } from '../../components/Toast';
 import { searchFoodsLocal } from '../../core/foodDB';
 import { dataEvents } from '../../core/dataEvents';
-import { calculatePortion, CalculatedNutrients } from '../../core/domain/nutritionEngine';
+import { calculatePortion, CalculatedNutrients, classifyNovaGroup } from '../../core/domain/nutritionEngine';
+import { soundHaptics } from '../../core/soundHaptics';
+import BarcodeScannerModal from '../../components/BarcodeScannerModal';
 
 const { width } = Dimensions.get('window');
 
@@ -29,16 +31,37 @@ interface Food {
   protein_g: number;
   carbs_g: number;
   fats_g: number;
+  saturated_fats_g?: number | null;
+  monounsaturated_fats_g?: number | null;
+  polyunsaturated_fats_g?: number | null;
+  trans_fats_g?: number | null;
+  cholesterol_mg?: number | null;
   fiber_g?: number | null;
   sodium_mg?: number | null;
   base_qty: number;
   unit_type: string;
+  serving_description?: string;
   data_source?: string;
+  source?: string;
   brand?: string;
+  category?: string;
   preparation_type?: string;
   user_id?: string;
   is_custom?: boolean;
 }
+
+const FOOD_CATEGORIES = [
+  'Todas',
+  'Cereais & Pães',
+  'Carnes & Aves',
+  'Ovos & Derivados',
+  'Leguminosas & Grãos',
+  'Leite & Laticínios',
+  'Frutas',
+  'Vegetais & Verduras',
+  'Suplementos & Fitness',
+  'Óleos & Gorduras',
+];
 
 const MEALS_PT = [
   { key: 'breakfast', label: 'Café da Manhã' },
@@ -51,6 +74,7 @@ const QUICK_GRAM_BUTTONS = [50, 100, 150, 200, 300];
 
 export default function FoodSearch() {
   const [query, setQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('Todas');
   const [results, setResults] = useState<{ master: Food[]; custom: Food[] }>({ master: [], custom: [] });
   const [loading, setLoading] = useState(false);
   const [selectedFood, setSelectedFood] = useState<Food | null>(null);
@@ -58,6 +82,7 @@ export default function FoodSearch() {
   const [mealType, setMealType] = useState('breakfast');
   const [activeTab, setActiveTab] = useState<'recent' | 'favorites' | 'custom'>('recent');
   const [showCustomModal, setShowCustomModal] = useState(false);
+  const [showScannerModal, setShowScannerModal] = useState(false);
   const [loggingFood, setLoggingFood] = useState(false);
 
   // Dados das abas
@@ -79,14 +104,22 @@ export default function FoodSearch() {
 
   const { showToast } = useToast();
 
-  const searchFood = async () => {
-    if (!query.trim()) return;
+  const searchFood = async (searchTerm?: string, catFilter?: string) => {
+    const term = (searchTerm !== undefined ? searchTerm : query).trim();
+    const cat = catFilter !== undefined ? catFilter : selectedCategory;
+    const effectiveCat = cat === 'Todas' ? '' : cat;
+
+    if (!term && !effectiveCat) {
+      setResults({ master: [], custom: [] });
+      return;
+    }
+
     setLoading(true);
     try {
-      // 1. Tenta buscar no cache local
-      const localResults = await searchFoodsLocal(query);
+      // 1. Tenta buscar no cache local (inclui alimentos básicos e frequentes)
+      const localResults = await searchFoodsLocal(term, effectiveCat);
       if (localResults.length > 0) {
-        const master = localResults.filter((f) => f.source === 'master');
+        const master = localResults.filter((f) => f.source !== 'custom');
         const custom = localResults
           .filter((f) => f.source === 'custom')
           .map((f) => ({ ...f, is_custom: true }));
@@ -95,8 +128,11 @@ export default function FoodSearch() {
         return;
       }
 
-      // 2. Busca online via Supabase (Trigram)
-      const res = await api.get('/api/food/search', { q: query.trim() });
+      // 2. Busca online via Supabase (RPC search_foods_v2 com relevância)
+      const res = await api.get('/api/food/search', {
+        q: term,
+        category: effectiveCat,
+      });
       const customWithFlag = (res.custom || []).map((f: Food) => ({ ...f, is_custom: true }));
       setResults({ master: res.master || [], custom: customWithFlag });
     } catch (e) {
@@ -106,6 +142,18 @@ export default function FoodSearch() {
       setLoading(false);
     }
   };
+
+  // Debounce automático da digitação (busca em tempo real a partir de 2 caracteres)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (query.trim().length >= 2) {
+        searchFood(query, selectedCategory);
+      } else if (!query.trim() && selectedCategory !== 'Todas') {
+        searchFood('', selectedCategory);
+      }
+    }, 280);
+    return () => clearTimeout(timer);
+  }, [query, selectedCategory]);
 
   const handleLogFood = async () => {
     if (!selectedFood) return;
@@ -118,6 +166,11 @@ export default function FoodSearch() {
         protein_g: selectedFood.protein_g,
         carbs_g: selectedFood.carbs_g,
         fats_g: selectedFood.fats_g,
+        saturated_fats_g: selectedFood.saturated_fats_g,
+        monounsaturated_fats_g: selectedFood.monounsaturated_fats_g,
+        polyunsaturated_fats_g: selectedFood.polyunsaturated_fats_g,
+        trans_fats_g: selectedFood.trans_fats_g,
+        cholesterol_mg: selectedFood.cholesterol_mg,
         fiber_g: selectedFood.fiber_g,
         sodium_mg: selectedFood.sodium_mg,
       },
@@ -134,12 +187,18 @@ export default function FoodSearch() {
         food_custom_id: selectedFood.is_custom || selectedFood.user_id ? selectedFood.id : null,
         food_name: selectedFood.name,
         brand: selectedFood.brand || null,
+        category: selectedFood.category || null,
         qty: qty,
         unit_type: selectedFood.unit_type || 'g',
         calories: calculated.calories,
         protein_g: calculated.protein_g,
         carbs_g: calculated.carbs_g,
         fats_g: calculated.fats_g,
+        saturated_fats_g: calculated.saturated_fats_g,
+        monounsaturated_fats_g: calculated.monounsaturated_fats_g,
+        polyunsaturated_fats_g: calculated.polyunsaturated_fats_g,
+        trans_fats_g: calculated.trans_fats_g,
+        cholesterol_mg: calculated.cholesterol_mg,
         fiber_g: calculated.fiber_g,
         sodium_mg: calculated.sodium_mg,
       };
@@ -270,6 +329,21 @@ export default function FoodSearch() {
     else if (activeTab === 'custom') loadCustom();
   }, [activeTab]);
 
+  // Busca ágil com debounce de 350ms
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setResults({ master: [], custom: [] });
+      return;
+    }
+    if (trimmed.length >= 2) {
+      const timer = setTimeout(() => {
+        searchFood();
+      }, 350);
+      return () => clearTimeout(timer);
+    }
+  }, [query]);
+
   useEffect(() => {
     const refreshActiveTab = () => {
       if (activeTab === 'recent') loadRecent();
@@ -293,7 +367,9 @@ export default function FoodSearch() {
 
   // Render do Alimento na Lista
   const renderFoodItem = ({ item }: { item: Food }) => {
-    const isTBCA = !item.is_custom && !item.user_id;
+    const isCustom = Boolean(item.is_custom || item.user_id);
+    const source = item.source || (isCustom ? 'custom' : 'tbca');
+    const nova = classifyNovaGroup(item.name, item.category);
 
     return (
       <TouchableOpacity
@@ -313,7 +389,22 @@ export default function FoodSearch() {
             <Text style={styles.foodName} numberOfLines={1}>
               {item.name}
             </Text>
-            {isTBCA ? (
+            <View style={[styles.novaBadge, { backgroundColor: nova.badgeBg, borderColor: `${nova.color}50` }]}>
+              <Text style={[styles.novaBadgeText, { color: nova.color }]}>{nova.shortLabel}</Text>
+            </View>
+            {source === 'taco' ? (
+              <View style={styles.tacoBadge}>
+                <Text style={styles.tacoBadgeText}>TACO</Text>
+              </View>
+            ) : source === 'verified' ? (
+              <View style={styles.fitBadge}>
+                <Text style={styles.fitBadgeText}>Fit</Text>
+              </View>
+            ) : source === 'openfoodfacts' ? (
+              <View style={styles.offBadge}>
+                <Text style={styles.offBadgeText}>Mercado</Text>
+              </View>
+            ) : !isCustom ? (
               <View style={styles.tbcaBadge}>
                 <Text style={styles.tbcaBadgeText}>TBCA</Text>
               </View>
@@ -324,9 +415,10 @@ export default function FoodSearch() {
             )}
           </View>
 
-          <Text style={styles.foodServing}>
+          <Text style={styles.foodServing} numberOfLines={1}>
             Porção padrão: {item.base_qty || 100}{item.unit_type || 'g'}
-            {item.preparation_type ? ` • ${item.preparation_type}` : ''}
+            {item.category ? ` • ${item.category}` : ''}
+            {item.brand ? ` • ${item.brand}` : ''}
           </Text>
 
           <View style={styles.foodMacrosRow}>
@@ -355,6 +447,11 @@ export default function FoodSearch() {
           protein_g: selectedFood.protein_g,
           carbs_g: selectedFood.carbs_g,
           fats_g: selectedFood.fats_g,
+          saturated_fats_g: selectedFood.saturated_fats_g,
+          monounsaturated_fats_g: selectedFood.monounsaturated_fats_g,
+          polyunsaturated_fats_g: selectedFood.polyunsaturated_fats_g,
+          trans_fats_g: selectedFood.trans_fats_g,
+          cholesterol_mg: selectedFood.cholesterol_mg,
           fiber_g: selectedFood.fiber_g,
           sodium_mg: selectedFood.sodium_mg,
         },
@@ -371,16 +468,16 @@ export default function FoodSearch() {
           <Search color="#6b7280" size={20} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Buscar alimentos (ex: Arroz, Frango, Tapioca)..."
+            placeholder="Buscar alimentos ou código de barras..."
             placeholderTextColor="#6b7280"
             value={query}
             onChangeText={(text) => {
               setQuery(text);
-              if (!text.trim()) {
+              if (!text.trim() && selectedCategory === 'Todas') {
                 setResults({ master: [], custom: [] });
               }
             }}
-            onSubmitEditing={searchFood}
+            onSubmitEditing={() => searchFood(query, selectedCategory)}
             returnKeyType="search"
           />
           {query.length > 0 && (
@@ -390,9 +487,41 @@ export default function FoodSearch() {
           )}
         </View>
 
-        <TouchableOpacity style={styles.searchSubmitBtn} onPress={searchFood}>
+        <TouchableOpacity
+          style={styles.scanBtn}
+          onPress={() => {
+            soundHaptics.triggerLightTap();
+            setShowScannerModal(true);
+          }}
+          activeOpacity={0.8}
+        >
+          <ScanBarcode color="#10b981" size={20} />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.searchSubmitBtn} onPress={() => searchFood(query, selectedCategory)}>
           <Search color="#0a1a15" size={18} />
         </TouchableOpacity>
+      </View>
+
+      {/* Chips Rápidos de Categorias */}
+      <View style={styles.categoryChipsContainer}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryChipsScroll}>
+          {FOOD_CATEGORIES.map((cat) => (
+            <TouchableOpacity
+              key={cat}
+              onPress={() => {
+                setSelectedCategory(cat);
+                searchFood(query, cat);
+              }}
+              style={[styles.categoryChip, selectedCategory === cat && styles.categoryChipActive]}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.categoryChipText, selectedCategory === cat && styles.categoryChipTextActive]}>
+                {cat}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
       </View>
 
       {/* Abas de Navegação */}
@@ -495,7 +624,13 @@ export default function FoodSearch() {
                   </Text>
                   <View style={styles.originBadge}>
                     <Text style={styles.originBadgeText}>
-                      {selectedFood?.is_custom ? 'Receita Própria' : 'TBCA • USP'}
+                      {selectedFood?.is_custom || selectedFood?.user_id
+                        ? 'Receita Própria'
+                        : selectedFood?.source === 'taco'
+                        ? 'TACO • UNICAMP'
+                        : selectedFood?.source === 'verified'
+                        ? 'Fit Verificado'
+                        : 'TBCA • USP'}
                     </Text>
                   </View>
                 </View>
@@ -512,6 +647,17 @@ export default function FoodSearch() {
                 />
               </TouchableOpacity>
             </View>
+
+            {/* Classificação NOVA (Guia Alimentar para a População Brasileira) */}
+            {selectedFood && (() => {
+              const selectedNova = classifyNovaGroup(selectedFood.name, selectedFood.category);
+              return (
+                <View style={[styles.modalNovaCard, { backgroundColor: selectedNova.badgeBg, borderColor: `${selectedNova.color}40` }]}>
+                  <Text style={[styles.modalNovaTitle, { color: selectedNova.color }]}>{selectedNova.label}</Text>
+                  <Text style={styles.modalNovaDesc}>{selectedNova.description}</Text>
+                </View>
+              );
+            })()}
 
             {/* 5 Cards de Macronutrientes (Com Fibras) */}
             {calculatedModalNutrients && (
@@ -538,6 +684,52 @@ export default function FoodSearch() {
                   <Text style={styles.macroBoxValue}>{calculatedModalNutrients.fiber_g}g</Text>
                   <Text style={styles.macroBoxLabel}>FIBR</Text>
                 </View>
+              </View>
+            )}
+
+            {/* Detalhamento do Perfil Lipídico da Porção */}
+            {calculatedModalNutrients && (
+              <View style={styles.lipidSection}>
+                <View style={styles.lipidHeaderRow}>
+                  <Text style={styles.lipidSectionTitle}>Perfil Lipídico da Porção</Text>
+                  <Text style={styles.lipidSectionSub}>Totais: {calculatedModalNutrients.fats_g}g</Text>
+                </View>
+
+                <View style={styles.lipidGrid}>
+                  <View style={styles.lipidTag}>
+                    <Text style={styles.lipidTagLabel}>Saturada</Text>
+                    <Text style={[styles.lipidTagVal, calculatedModalNutrients.saturated_fats_g > 4 ? { color: '#f59e0b' } : {}]}>
+                      {calculatedModalNutrients.saturated_fats_g}g
+                    </Text>
+                  </View>
+                  <View style={styles.lipidTag}>
+                    <Text style={styles.lipidTagLabel}>Monoinsat.</Text>
+                    <Text style={[styles.lipidTagVal, { color: '#22c55e' }]}>
+                      {calculatedModalNutrients.monounsaturated_fats_g}g
+                    </Text>
+                  </View>
+                  <View style={styles.lipidTag}>
+                    <Text style={styles.lipidTagLabel}>Poli-insat.</Text>
+                    <Text style={[styles.lipidTagVal, { color: '#38bdf8' }]}>
+                      {calculatedModalNutrients.polyunsaturated_fats_g}g
+                    </Text>
+                  </View>
+                  <View style={styles.lipidTag}>
+                    <Text style={styles.lipidTagLabel}>Colesterol</Text>
+                    <Text style={styles.lipidTagVal}>
+                      {calculatedModalNutrients.cholesterol_mg}mg
+                    </Text>
+                  </View>
+                </View>
+
+                {calculatedModalNutrients.trans_fats_g > 0.05 && (
+                  <View style={styles.transAlertBanner}>
+                    <AlertCircle color="#ef4444" size={13} />
+                    <Text style={styles.transAlertText}>
+                      Atenção: contém {calculatedModalNutrients.trans_fats_g}g de gordura trans.
+                    </Text>
+                  </View>
+                )}
               </View>
             )}
 
@@ -742,6 +934,20 @@ export default function FoodSearch() {
           </View>
         </View>
       </Modal>
+
+      {/* Modal Leitor de Código de Barras / Câmera */}
+      <BarcodeScannerModal
+        visible={showScannerModal}
+        onClose={() => setShowScannerModal(false)}
+        onFoodSelected={(food) => {
+          setSelectedFood(food);
+          setQty(food.base_qty || 100);
+        }}
+        onManualCustomRequest={(code) => {
+          setCustomName(`Produto (${code})`);
+          setShowCustomModal(true);
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -764,6 +970,16 @@ const styles = StyleSheet.create({
   searchInput: { flex: 1, color: '#ffffff', paddingVertical: 12, paddingHorizontal: 10, fontSize: 14 },
   searchSubmitBtn: {
     backgroundColor: '#22c55e',
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scanBtn: {
+    backgroundColor: '#0f2920',
+    borderWidth: 1,
+    borderColor: '#10b981',
     width: 46,
     height: 46,
     borderRadius: 14,
@@ -828,8 +1044,29 @@ const styles = StyleSheet.create({
   foodName: { color: '#ffffff', fontSize: 15, fontWeight: '600', flex: 1 },
   tbcaBadge: { backgroundColor: 'rgba(34, 197, 94, 0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
   tbcaBadgeText: { color: '#22c55e', fontSize: 10, fontWeight: '700' },
-  customBadge: { backgroundColor: 'rgba(56, 189, 248, 0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
-  customBadgeText: { color: '#38bdf8', fontSize: 10, fontWeight: '700' },
+  tacoBadge: { backgroundColor: 'rgba(56, 189, 248, 0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  tacoBadgeText: { color: '#38bdf8', fontSize: 10, fontWeight: '700' },
+  fitBadge: { backgroundColor: 'rgba(168, 85, 247, 0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  fitBadgeText: { color: '#c084fc', fontSize: 10, fontWeight: '700' },
+  offBadge: { backgroundColor: 'rgba(234, 179, 8, 0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  offBadgeText: { color: '#facc15', fontSize: 10, fontWeight: '700' },
+  customBadge: { backgroundColor: 'rgba(245, 158, 11, 0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  customBadgeText: { color: '#f59e0b', fontSize: 10, fontWeight: '700' },
+
+  // Chips de Categorias
+  categoryChipsContainer: { paddingVertical: 6, marginBottom: 4 },
+  categoryChipsScroll: { paddingHorizontal: 16, gap: 8 },
+  categoryChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 16,
+    backgroundColor: '#133024',
+    borderWidth: 1,
+    borderColor: '#1f3d32',
+  },
+  categoryChipActive: { backgroundColor: '#22c55e', borderColor: '#22c55e' },
+  categoryChipText: { color: '#9ca3af', fontSize: 12, fontWeight: '600' },
+  categoryChipTextActive: { color: '#0a1a15', fontWeight: '700' },
 
   foodServing: { color: '#9ca3af', fontSize: 12, marginTop: 2 },
   foodMacrosRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 },
@@ -881,6 +1118,47 @@ const styles = StyleSheet.create({
   macroBoxValueHighlight: { color: '#0a1a15' },
   macroBoxLabel: { color: '#9ca3af', fontSize: 10, marginTop: 2, fontWeight: '700' },
   macroBoxLabelHighlight: { color: '#0a1a15' },
+
+  // Perfil Lipídico no Modal
+  lipidSection: {
+    backgroundColor: 'rgba(21, 53, 40, 0.7)',
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#1f3d32',
+    marginBottom: 16,
+  },
+  lipidHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  lipidSectionTitle: { color: '#ffffff', fontSize: 13, fontWeight: '700' },
+  lipidSectionSub: { color: '#9ca3af', fontSize: 12 },
+  lipidGrid: { flexDirection: 'row', gap: 6 },
+  lipidTag: {
+    flex: 1,
+    backgroundColor: '#0f2920',
+    paddingVertical: 8,
+    paddingHorizontal: 2,
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#1f3d32',
+  },
+  lipidTagLabel: { color: '#9ca3af', fontSize: 9, fontWeight: '600', marginBottom: 2 },
+  lipidTagVal: { color: '#ffffff', fontSize: 12, fontWeight: 'bold' },
+  transAlertBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    padding: 8,
+    borderRadius: 8,
+  },
+  transAlertText: { color: '#fca5a5', fontSize: 11, flex: 1 },
 
   incompleteDataBanner: {
     flexDirection: 'row',
@@ -952,4 +1230,23 @@ const styles = StyleSheet.create({
   rowInputs: { flexDirection: 'row', gap: 8 },
   halfInput: { flex: 1 },
   fourthInput: { flex: 1 },
+
+  // Estilos da Classificação NOVA (Ministério da Saúde)
+  novaBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginLeft: 6,
+    alignSelf: 'center',
+  },
+  novaBadgeText: { fontSize: 10, fontWeight: '700' },
+  modalNovaCard: {
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 16,
+  },
+  modalNovaTitle: { fontSize: 13, fontWeight: 'bold', marginBottom: 2 },
+  modalNovaDesc: { color: '#d1d5db', fontSize: 11, lineHeight: 15 },
 });

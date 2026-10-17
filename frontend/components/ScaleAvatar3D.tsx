@@ -151,6 +151,57 @@ function applyMorphology(root: THREE.Object3D, m: BodyMorphology): void {
   });
 }
 
+let cachedFabricNormal: THREE.DataTexture | null = null;
+function getFabricNormalTexture(): THREE.DataTexture {
+  if (cachedFabricNormal) return cachedFabricNormal;
+  const size = 64;
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const idx = (y * size + x) * 4;
+      const waveX = Math.sin((x / size) * Math.PI * 12);
+      const waveY = Math.cos((y / size) * Math.PI * 12);
+      const bump = waveX * waveY * 0.35;
+      data[idx] = Math.round(128 + bump * 60);
+      data[idx + 1] = Math.round(128 + bump * 60);
+      data[idx + 2] = 240;
+      data[idx + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(20, 20);
+  tex.needsUpdate = true;
+  cachedFabricNormal = tex;
+  return tex;
+}
+
+let cachedSoleNormal: THREE.DataTexture | null = null;
+function getSoleNormalTexture(): THREE.DataTexture {
+  if (cachedSoleNormal) return cachedSoleNormal;
+  const size = 64;
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const idx = (y * size + x) * 4;
+      const d = ((x % 8) - 4) * ((y % 8) - 4);
+      const bump = Math.sin(d * 0.5) * 0.45;
+      data[idx] = Math.round(128 + bump * 70);
+      data[idx + 1] = Math.round(128 + bump * 70);
+      data[idx + 2] = 230;
+      data[idx + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(10, 10);
+  tex.needsUpdate = true;
+  cachedSoleNormal = tex;
+  return tex;
+}
+
 function applyCustomization(root: THREE.Object3D, custom?: Partial<MascotCustomization> | null, mascotId?: MascotId): void {
   if (!custom) return;
   root.traverse((o) => {
@@ -161,20 +212,19 @@ function applyCustomization(root: THREE.Object3D, custom?: Partial<MascotCustomi
         const name = (mat.name || o.name || '').toLowerCase();
         if (/gym_shorts/i.test(name) && custom.suitColor) {
           mat.color.setStyle(custom.suitColor);
-          mat.needsUpdate = true;
         } else if (/gym_top/i.test(name)) {
           const topColor = custom.topColor || custom.suitColor;
-          if (topColor) {
-            mat.color.setStyle(topColor);
-            mat.needsUpdate = true;
-          }
+          if (topColor) mat.color.setStyle(topColor);
         } else if (/sneaker_upper/i.test(name) && custom.sneakersColor) {
           mat.color.setStyle(custom.sneakersColor);
-          mat.needsUpdate = true;
+        } else if (/hair/i.test(name) && custom.hairColor) {
+          mat.color.setStyle(custom.hairColor);
         } else if (/eyes/i.test(name) && custom.eyeColor) {
           mat.color.setStyle(custom.eyeColor);
-          mat.needsUpdate = true;
+        } else if (/superhero/i.test(name) && custom.skinTone && custom.skinTone !== '#fde68a') {
+          mat.color.setStyle(custom.skinTone);
         }
+        mat.needsUpdate = true;
       }
     }
   });
@@ -309,7 +359,7 @@ export function ScaleAvatar3D({
   const onContextCreate = async (gl: WebGLRenderingContext) => {
     const isWeb = Platform.OS === 'web';
     const viewWidth = size;
-    const viewHeight = Math.round(size * 1.28);
+    const viewHeight = Math.round(size * 1.38);
     const pixelRatio = isWeb && typeof window !== 'undefined'
       ? Math.min(window.devicePixelRatio || 1, 2)
       : 1;
@@ -341,32 +391,40 @@ export function ScaleAvatar3D({
     const scene = new THREE.Scene();
     sceneRef.current = scene;
 
-    // Enquadramento de Corpo Inteiro Perfeito (Head-to-Toe)
-    // Modelo altura 1.85, base da balança em Y=0.
-    // FOV 35° a Z=3.85 centraliza de -0.15 a 2.05 no eixo vertical com aspecto 1/1.28
+    // Enquadramento de Corpo Inteiro Perfeito (Head-to-Toe) com Respiro Superior Nobre
+    // Modelo altura 1.85m a 2.05m com respiração, postura ereta e balança na base
+    // Câmera Z=5.10 e FOV 35° garante enquadramento de corpo inteiro sem nenhum corte na cabeça ou braços
     const aspect = viewWidth / viewHeight;
     const camera = new THREE.PerspectiveCamera(35, aspect, 0.1, 50);
-    camera.position.set(0, 1.08, 3.85);
-    camera.lookAt(0, 0.92, 0);
+    camera.position.set(0, 1.06, 5.10);
+    camera.lookAt(0, 1.00, 0);
 
-    scene.add(new THREE.AmbientLight(0xffffff, 1.2));
-    const dir = new THREE.DirectionalLight(0xffffff, 3.0);
-    dir.position.set(2.5, 4.5, 3.5);
+    // Rig Fotográfico 3-Pontos Estúdio Esportivo
+    // 1. Hemisphere Light (Gradiente céu esportivo frio -> piso escuro)
+    const hemi = new THREE.HemisphereLight(0xe0f2fe, 0x052e16, 0.75);
+    scene.add(hemi);
+
+    // 2. Luz Principal Quente (Key Light) com sombras suaves
+    const dir = new THREE.DirectionalLight(0xfffaed, 2.5);
+    dir.position.set(2.4, 4.2, 3.4);
     dir.castShadow = true;
     dir.shadow.mapSize.set(512, 512);
     dir.shadow.camera.far = 10;
     dir.shadow.bias = -0.001;
     scene.add(dir);
 
-    const dir2 = new THREE.DirectionalLight(0xa7f3d0, 1.0);
-    dir2.position.set(-2.5, 2.0, -1.5);
+    // 3. Luz de Preenchimento (Fill Light) para suavizar sombras do torso
+    const dir2 = new THREE.DirectionalLight(0x93c5fd, 0.7);
+    dir2.position.set(-2.6, 2.0, 1.8);
     scene.add(dir2);
 
-    const rim = new THREE.DirectionalLight(morphology.glowColor, 1.5);
-    rim.position.set(0, 3.0, -3.0);
+    // 4. Luz de Contorno Atlética (Rim Backlight) destacando ombros, trapézio e silhueta
+    const rim = new THREE.DirectionalLight(morphology.glowColor, 2.6);
+    rim.position.set(0, 3.2, -3.2);
     scene.add(rim);
 
-    const point = new THREE.PointLight(morphology.glowColor, 6, 6);
+    // 5. Luz de Bioimpedância da Balança
+    const point = new THREE.PointLight(morphology.glowColor, 5, 5);
     point.position.set(0, 2.2, 0);
     scene.add(point);
     pointLightRef.current = point;
@@ -421,23 +479,52 @@ export function ScaleAvatar3D({
         applyCustomization(model, customization, mascotId);
       }
 
-      // Preserva e otimiza os materiais PBR originais do GLB (roupas de academia, tênis, pele e cabelo)
+      // Calibração PBR de Alta Fidelidade: Microtexturas de Compressão, Tênis e Especularidade
+      const fabricNormal = getFabricNormalTexture();
+      const soleNormal = getSoleNormalTexture();
+
       model.traverse((o) => {
         if (o instanceof THREE.Mesh && o.material) {
           const isVisor = /visor/i.test(o.name);
           const materials = Array.isArray(o.material) ? o.material : [o.material];
           for (const m of materials) {
             const mat = m as THREE.MeshStandardMaterial;
+            const matName = (mat.name || o.name || '').toLowerCase();
+
             if (isVisor) {
               mat.color.setStyle(morphology.glowColor);
               mat.emissive.setStyle(morphology.glowColor);
               mat.emissiveIntensity = 0.6;
               mat.metalness = 0.8;
               mat.roughness = 0.2;
+            } else if (/gym_shorts|gym_top/i.test(matName)) {
+              // Tecido de compressão atlético tipo Lycra/Under Armour com micro-trama
+              mat.normalMap = fabricNormal;
+              mat.normalScale = new THREE.Vector2(0.4, 0.4);
+              mat.roughness = 0.58;
+              mat.metalness = 0.04;
+            } else if (/sneaker_sole/i.test(matName)) {
+              // Solado esportivo com piso de tração
+              mat.normalMap = soleNormal;
+              mat.normalScale = new THREE.Vector2(0.6, 0.6);
+              mat.roughness = 0.85;
+              mat.metalness = 0.02;
+            } else if (/sneaker_upper/i.test(matName)) {
+              mat.roughness = 0.45;
+              mat.metalness = 0.08;
+            } else if (/hair/i.test(matName)) {
+              // Cabelo atlético com reflexo sedoso e disciplinado
+              mat.roughness = 0.42;
+              mat.metalness = 0.03;
+            } else if (/eyes/i.test(matName)) {
+              // Córnea vítrea com alto reflexo especular
+              mat.roughness = 0.12;
+              mat.metalness = 0.15;
             } else if (mat.map) {
+              // Pele com normal maps anatômicos preservados
               mat.color.setHex(0xffffff);
-              mat.metalness = Math.min(0.1, mat.metalness ?? 0.05);
-              mat.roughness = Math.max(0.4, mat.roughness ?? 0.5);
+              mat.metalness = 0.04;
+              mat.roughness = 0.52;
             }
             mat.needsUpdate = true;
           }
@@ -541,7 +628,7 @@ export function ScaleAvatar3D({
   const showQuote = isInspecting && !simple;
 
   const viewWidth = size;
-  const viewHeight = Math.round(size * 1.28);
+  const viewHeight = Math.round(size * 1.38);
 
   return (
     <View
@@ -579,17 +666,17 @@ export function ScaleAvatar3D({
 const styles = StyleSheet.create({
   weightBadge: {
     position: 'absolute',
-    bottom: 0,
+    bottom: 6,
     alignSelf: 'center',
     backgroundColor: 'rgba(4, 13, 9, 0.88)',
     borderWidth: 1,
     borderColor: 'rgba(34, 197, 94, 0.45)',
-    borderRadius: 12,
+    borderRadius: 14,
     paddingHorizontal: 12,
-    paddingVertical: 3,
+    paddingVertical: 3.5,
     shadowColor: '#22c55e',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.35,
     shadowRadius: 6,
     elevation: 4,
   },

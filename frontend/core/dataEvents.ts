@@ -9,7 +9,9 @@ type EventName =
   | 'weight_logged'
   | 'profile_updated'
   | 'targets_updated'
-  | 'exercise_logged';
+  | 'exercise_logged'
+  | 'checkin_logged'
+  | 'checkin_skipped';
 
 type Listener = () => void;
 

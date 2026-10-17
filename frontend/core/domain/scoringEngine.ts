@@ -20,6 +20,8 @@ export interface WeeklyScoreBreakdown {
   exercisePoints: number; // 10 pts por dia com >= 20 min de treino
   waterDays: number;
   waterPoints: number; // 5 pts por dia com >= 80% da meta de água
+  checkinCompleted: boolean;
+  checkinPoints: number; // 15 pts por realizar o check-in oficial de bioimpedância da semana
   streakBonus: number; // 20 pts se atingiu 5+ dias de consistência
   totalPoints: number;
 }
@@ -28,7 +30,8 @@ export interface WeeklyScoreBreakdown {
  * Calcula a pontuação semanal de hábitos saudáveis de um usuário.
  */
 export function calculateWeeklyHabitScore(
-  days: DayHabitSummary[]
+  days: DayHabitSummary[],
+  checkinCompletedThisWeek: boolean = false
 ): WeeklyScoreBreakdown {
   let foodDays = 0;
   let exerciseDays = 0;
@@ -50,10 +53,11 @@ export function calculateWeeklyHabitScore(
   const foodPoints = foodDays * 10;
   const exercisePoints = exerciseDays * 10;
   const waterPoints = waterDays * 5;
+  const checkinPoints = checkinCompletedThisWeek ? 15 : 0;
 
   // Bônus de consistência: atingiu ao menos 5 dias ativos em alimentação ou treino
   const streakBonus = foodDays >= 5 || exerciseDays >= 5 ? 20 : 0;
-  const totalPoints = foodPoints + exercisePoints + waterPoints + streakBonus;
+  const totalPoints = foodPoints + exercisePoints + waterPoints + checkinPoints + streakBonus;
 
   return {
     foodDays,
@@ -62,6 +66,8 @@ export function calculateWeeklyHabitScore(
     exercisePoints,
     waterDays,
     waterPoints,
+    checkinCompleted: checkinCompletedThisWeek,
+    checkinPoints,
     streakBonus,
     totalPoints,
   };

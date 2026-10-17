@@ -113,7 +113,7 @@ export const LivingAvatar3D: React.FC<LivingAvatar3DProps> = ({
   const glowColor = morphology?.glowColor || (isTita ? '#22c55e' : '#10b981');
 
   return (
-    <View style={[styles.outerContainer, { width: size, height: Math.round(size * 1.28) }]}>
+    <View style={[styles.outerContainer, { width: size, height: Math.round(size * 1.38) }]}>
       {/* 1. BALÃO DE FALA INTERATIVO */}
       {!hideBubble && activeSpeech ? (
         <Animated.View

@@ -1,12 +1,12 @@
 export default {
   expo: {
-    name: "Akilo",
-    slug: "akilo",
-    version: "1.0.0",
+    name: "Batalha da Balança",
+    slug: "batalha-da-balanca",
+    version: "2.0.0",
     orientation: "portrait",
     icon: "./assets/logo.png",
     userInterfaceStyle: "dark",
-    scheme: "akilo",
+    scheme: "batalhadabalanca",
     newArchEnabled: true,
     splash: {
       image: "./assets/logo.png",
@@ -14,16 +14,26 @@ export default {
       backgroundColor: "#0a1a15"
     },
     ios: {
-      supportsTablet: true
+      supportsTablet: true,
+      bundleIdentifier: "com.batalhadabalanca.app",
+      infoPlist: {
+        NSCameraUsageDescription: "O Batalha da Balança utiliza a câmera exclusivamente para ler o código de barras de alimentos e recuperar dados nutricionais."
+      }
     },
     android: {
+      package: "com.batalhadabalanca.app",
+      versionCode: 1,
       adaptiveIcon: {
         foregroundImage: "./assets/logo.png",
         backgroundColor: "#0a1a15"
       },
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
-      package: "com.akilo.app"
+      permissions: [
+        "CAMERA",
+        "VIBRATE",
+        "INTERNET"
+      ]
     },
     web: {
       favicon: "./assets/logo.png"
@@ -35,4 +45,3 @@ export default {
     }
   }
 };
-

@@ -21,7 +21,8 @@ import {
   Droplets, 
   Dumbbell, 
   Utensils, 
-  Share2 
+  Share2,
+  Scale
 } from 'lucide-react-native';
 import { api } from '../core/api';
 import { useToast } from './Toast';
@@ -32,6 +33,8 @@ interface LeaderboardItem {
   food_logged_days: number;
   exercise_days: number;
   water_goal_days: number;
+  checkin_done_this_week?: number;
+  latest_checkin_date?: string;
   total_habit_points: number;
 }
 
@@ -223,7 +226,7 @@ export function CommunityModal({
                 <View style={{ flex: 1 }}>
                   <Text style={styles.ethicsTitle}>Pontuação Baseada em Hábitos</Text>
                   <Text style={styles.ethicsDesc}>
-                    Zero bônus para restrições ou perda de peso. Aqui você pontua ao registrar suas refeições diárias (+10), bater água (+5) e treinar (+10).
+                    Zero bônus para restrições ou perda de peso. Pontue com refeições (+10), água (+5), treino (+10) e Check-in oficial de bioimpedância da semana (+15 pts).
                   </Text>
                 </View>
               </View>
@@ -265,6 +268,12 @@ export function CommunityModal({
                             <Droplets color="#0ea5e9" size={12} />
                             <Text style={styles.habitBadgeText}>{item.water_goal_days}d</Text>
                           </View>
+                          {Boolean(item.checkin_done_this_week && item.checkin_done_this_week > 0) && (
+                            <View style={[styles.habitBadge, { backgroundColor: 'rgba(234, 179, 8, 0.15)', borderColor: 'rgba(234, 179, 8, 0.4)' }]}>
+                              <Scale color="#eab308" size={12} />
+                              <Text style={[styles.habitBadgeText, { color: '#eab308', fontWeight: 'bold' }]}>Check-in +15</Text>
+                            </View>
+                          )}
                         </View>
                       </View>
 

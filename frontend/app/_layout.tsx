@@ -1,9 +1,11 @@
 
+import '../core/polyfills';
 import { Slot, useRouter, useSegments } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { supabase } from '../core/supabase';
 import { Session } from '@supabase/supabase-js';
-import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, Text, StyleSheet, Platform } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ToastProvider } from '../components/Toast';
 import { hasCompletedOnboarding } from '../core/onboarding';
 import { NetworkProvider } from '../core/network';
@@ -88,16 +90,28 @@ export default function RootLayout() {
   }
 
   return (
-    <NetworkProvider>
-      <ToastProvider>
-        <OfflineBanner />
-        <Slot />
-      </ToastProvider>
-    </NetworkProvider>
+    <SafeAreaProvider style={styles.safeArea}>
+      <NetworkProvider>
+        <ToastProvider>
+          <View style={styles.appOuterShell}>
+            <View style={styles.appDeviceContainer}>
+              <OfflineBanner />
+              <Slot />
+            </View>
+          </View>
+        </ToastProvider>
+      </NetworkProvider>
+    </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#040d09',
+  },
   loadingContainer: {
     flex: 1,
     backgroundColor: '#0a1a15',
@@ -109,5 +123,22 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     fontSize: 14,
     marginTop: 12
-  }
+  },
+  appOuterShell: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#040d09',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  appDeviceContainer: {
+    flex: 1,
+    width: '100%',
+    maxWidth: 480,
+    height: '100%',
+    backgroundColor: '#0a1a15',
+    position: 'relative',
+    overflow: 'hidden',
+  },
 });
