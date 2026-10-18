@@ -77,11 +77,12 @@ export function calculateBMI(
   heightCm: number,
   age?: number | null
 ): BMIEvaluation | null {
-  if (!weightKg || !heightCm || weightKg <= 0 || heightCm <= 0) return null;
+  if (!weightKg || !heightCm || weightKg <= 0 || heightCm <= 0 || isNaN(weightKg) || isNaN(heightCm) || !isFinite(weightKg) || !isFinite(heightCm)) return null;
   const heightM = heightCm / 100;
   const bmiRaw = weightKg / (heightM * heightM);
+  if (!isFinite(bmiRaw) || isNaN(bmiRaw) || bmiRaw < 2.0 || weightKg < 1.0) return null;
   const bmi = Math.round(bmiRaw * 10) / 10;
-  const isElderly = Boolean(age && age >= 60);
+  const isElderly = Boolean(age && !isNaN(age) && age >= 60);
 
   // Critério de Lipschitz / Ministério da Saúde / SBGG para Idosos (>= 60 anos)
   if (isElderly) {
@@ -194,10 +195,10 @@ export function estimateBMR(
   age: number,
   sex: BiologicalSex = 'male'
 ): number {
-  if (!weightKg || !heightCm || !age) return 2000;
+  if (!weightKg || !heightCm || !age || isNaN(weightKg) || isNaN(heightCm) || isNaN(age) || weightKg <= 0 || heightCm <= 0 || age <= 0 || !isFinite(weightKg) || !isFinite(heightCm)) return 2000;
   const sexConstant = sex === 'female' ? -161 : 5;
   const bmr = 10 * weightKg + 6.25 * heightCm - 5 * age + sexConstant;
-  return Math.round(bmr);
+  return Math.max(500, Math.round(bmr));
 }
 
 /**

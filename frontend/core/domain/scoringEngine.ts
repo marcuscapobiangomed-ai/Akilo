@@ -30,14 +30,16 @@ export interface WeeklyScoreBreakdown {
  * Calcula a pontuação semanal de hábitos saudáveis de um usuário.
  */
 export function calculateWeeklyHabitScore(
-  days: DayHabitSummary[],
+  days?: DayHabitSummary[] | null,
   checkinCompletedThisWeek: boolean = false
 ): WeeklyScoreBreakdown {
+  const safeDays = Array.isArray(days) ? days : [];
   let foodDays = 0;
   let exerciseDays = 0;
   let waterDays = 0;
 
-  for (const day of days) {
+  for (const day of safeDays) {
+    if (!day) continue;
     if (day.distinctMealsCount >= 2) {
       foodDays++;
     }

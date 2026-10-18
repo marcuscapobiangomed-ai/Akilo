@@ -32,8 +32,9 @@ export interface UserContext {
 /**
  * Gera a lista de insights priorizados para o usuário a partir dos seus registros reais.
  */
-export function generateSmartInsights(ctx: UserContext): Insight[] {
+export function generateSmartInsights(ctx?: UserContext | null): Insight[] {
   const insights: Insight[] = [];
+  if (!ctx) return insights;
 
   // 1. CONSISTÊNCIA DE REGISTRO
   if (ctx.daysLoggedPast7d >= 5) {

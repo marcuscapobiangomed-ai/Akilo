@@ -24,20 +24,24 @@ export interface CheckinStatusResult {
 /**
  * Avalia se o usuário deve receber o aviso para atualizar suas medidas de bioimpedância.
  */
-export function evaluateCheckinDue(params: CheckinParams): CheckinStatusResult {
-  const now = params.currentDate || new Date();
-  const todayStr = now.toISOString().split('T')[0];
-  const freq = params.frequencyDays === 14 || params.frequencyDays === 30 ? params.frequencyDays : 7;
-  const prefDay = params.preferredWeekday !== undefined ? params.preferredWeekday : 1; // 1 = Segunda-feira
+export function evaluateCheckinDue(params?: CheckinParams | null): CheckinStatusResult {
+  const safeParams = params || {};
+  const now = safeParams.currentDate || new Date();
+  const todayStr = (now instanceof Date && !isNaN(now.getTime()))
+    ? now.toISOString().split('T')[0]
+    : new Date().toISOString().split('T')[0];
+
+  const freq = safeParams.frequencyDays === 14 || safeParams.frequencyDays === 30 ? safeParams.frequencyDays : 7;
+  const prefDay = safeParams.preferredWeekday !== undefined ? safeParams.preferredWeekday : 1; // 1 = Segunda-feira
 
   // 1. Se o usuário pulou hoje ou nos últimos 2 dias, respeita o snooze
-  if (params.lastSkippedDate) {
-    const diffSkipDays = getDaysBetween(params.lastSkippedDate, todayStr);
-    if (diffSkipDays >= 0 && diffSkipDays < 3) {
+  if (safeParams.lastSkippedDate) {
+    const diffSkipDays = getDaysBetween(safeParams.lastSkippedDate, todayStr);
+    if (!isNaN(diffSkipDays) && diffSkipDays >= 0 && diffSkipDays < 3) {
       return {
         isDue: false,
         reason: 'skipped_recently',
-        daysSinceLastCheckin: params.lastCheckinDate ? getDaysBetween(params.lastCheckinDate, todayStr) : null,
+        daysSinceLastCheckin: safeParams.lastCheckinDate ? getDaysBetween(safeParams.lastCheckinDate, todayStr) : null,
         nextDueDateFormatted: 'Adiado por alguns dias',
         badgeLabel: 'Adiado',
       };
@@ -45,7 +49,7 @@ export function evaluateCheckinDue(params: CheckinParams): CheckinStatusResult {
   }
 
   // 2. Se nunca realizou check-in
-  if (!params.lastCheckinDate) {
+  if (!safeParams.lastCheckinDate) {
     return {
       isDue: true,
       reason: 'first_time',
@@ -55,10 +59,21 @@ export function evaluateCheckinDue(params: CheckinParams): CheckinStatusResult {
     };
   }
 
-  const diffCheckinDays = getDaysBetween(params.lastCheckinDate, todayStr);
+  const diffCheckinDays = getDaysBetween(safeParams.lastCheckinDate, todayStr);
+
+  // Se a data for inválida, assume vencido com fallback gracioso
+  if (isNaN(diffCheckinDays)) {
+    return {
+      isDue: true,
+      reason: 'due',
+      daysSinceLastCheckin: null,
+      nextDueDateFormatted: 'Hoje',
+      badgeLabel: 'Hora do Check-in',
+    };
+  }
 
   // 3. Se realizou recentemente dentro da frequência configurada
-  if (diffCheckinDays < freq) {
+  if (diffCheckinDays < freq && diffCheckinDays >= 0) {
     const remainingDays = freq - diffCheckinDays;
     return {
       isDue: false,
@@ -80,13 +95,24 @@ export function evaluateCheckinDue(params: CheckinParams): CheckinStatusResult {
 }
 
 /**
- * Retorna a diferença em dias corridos entre duas datas no formato YYYY-MM-DD.
+ * Retorna a diferença em dias corridos entre duas datas no formato YYYY-MM-DD ou ISO.
  */
 export function getDaysBetween(dateStrA: string, dateStrB: string): number {
-  const [y1, m1, d1] = dateStrA.split('-').map(Number);
-  const [y2, m2, d2] = dateStrB.split('-').map(Number);
-  const utcA = Date.UTC(y1, m1 - 1, d1);
-  const utcB = Date.UTC(y2, m2 - 1, d2);
+  if (!dateStrA || !dateStrB) return 0;
+  const cleanA = String(dateStrA).split('T')[0].trim();
+  const cleanB = String(dateStrB).split('T')[0].trim();
+  const partsA = cleanA.split('-').map(Number);
+  const partsB = cleanB.split('-').map(Number);
+
+  if (partsA.length < 3 || partsB.length < 3 || partsA.some(isNaN) || partsB.some(isNaN)) {
+    const tA = new Date(dateStrA).getTime();
+    const tB = new Date(dateStrB).getTime();
+    if (isNaN(tA) || isNaN(tB)) return 0;
+    return Math.floor((tB - tA) / (1000 * 60 * 60 * 24));
+  }
+
+  const utcA = Date.UTC(partsA[0], partsA[1] - 1, partsA[2]);
+  const utcB = Date.UTC(partsB[0], partsB[1] - 1, partsB[2]);
   return Math.floor((utcB - utcA) / (1000 * 60 * 60 * 24));
 }
 

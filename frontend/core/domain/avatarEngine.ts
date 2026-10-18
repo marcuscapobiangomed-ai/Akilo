@@ -1021,24 +1021,31 @@ export function evaluateHypertrophyLadder(mascotId: MascotId, weightKg: number):
  * seus estágios evolutivos e a perda de peso/medidas corporais.
  */
 export function evaluateMascot(input: MascotInput): MascotEvaluation {
-  const sex: BiologicalSex = input.sex || (input.mascotId === 'gaia' ? 'female' : 'male');
-  const mascotId: MascotId = input.mascotId || (sex === 'female' ? 'gaia' : 'tita');
+  const safeInput = input || ({} as any);
+  const sex: BiologicalSex = safeInput.sex === 'female' || safeInput.mascotId === 'gaia' ? 'female' : 'male';
+  const mascotId: MascotId = safeInput.mascotId === 'gaia' ? 'gaia' : 'tita';
   const mascotName = mascotId === 'gaia' ? 'Gaia' : 'Titã';
 
-  const weight = input.weightKg;
-  const height = input.heightCm;
+  const rawWeight = Number(safeInput.weightKg);
+  const weight = !isNaN(rawWeight) && isFinite(rawWeight) && rawWeight > 0 ? rawWeight : 70.0;
+  const rawHeight = Number(safeInput.heightCm);
+  const height = !isNaN(rawHeight) && isFinite(rawHeight) && rawHeight > 0 ? rawHeight : 170.0;
   const heightM = height > 0 ? height / 100 : 1.7;
-  const bmi = heightM > 0 && weight > 0 ? Math.round((weight / (heightM * heightM)) * 10) / 10 : 24;
+  const bmiRaw = heightM > 0 && weight > 0 ? (weight / (heightM * heightM)) : 24.0;
+  const bmi = isFinite(bmiRaw) && bmiRaw > 0 ? Math.round(bmiRaw * 10) / 10 : 24.0;
 
-  const fatPct = input.bodyFatPct;
-  const musclePct = input.muscleMassPct;
+  const rawFat = safeInput.bodyFatPct !== undefined && safeInput.bodyFatPct !== null ? Number(safeInput.bodyFatPct) : undefined;
+  const fatPct = rawFat !== undefined && !isNaN(rawFat) && isFinite(rawFat) && rawFat >= 0 ? Math.min(80, rawFat) : undefined;
+  const rawMuscle = safeInput.muscleMassPct !== undefined && safeInput.muscleMassPct !== null ? Number(safeInput.muscleMassPct) : undefined;
+  const musclePct = rawMuscle !== undefined && !isNaN(rawMuscle) && isFinite(rawMuscle) && rawMuscle >= 0 ? Math.min(95, rawMuscle) : undefined;
 
   // 1. Cálculo do Peso Meta e Diferencial
   const targetWeightKg = Math.round(23.5 * heightM * heightM * 10) / 10;
   const weightDeltaKg = Math.round((weight - targetWeightKg) * 10) / 10;
 
   // 2. Métricas de Perda de Peso & Redução de Medidas Corporais
-  const initialWeight = input.initialWeightKg && input.initialWeightKg > 0 ? input.initialWeightKg : weight;
+  const rawInitWeight = Number(safeInput.initialWeightKg);
+  const initialWeight = !isNaN(rawInitWeight) && isFinite(rawInitWeight) && rawInitWeight > 0 ? rawInitWeight : weight;
   const weightLostKg = Math.round(Math.max(0, initialWeight - weight) * 10) / 10;
 
   // Variação de gordura corporal

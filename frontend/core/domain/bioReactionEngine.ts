@@ -93,17 +93,22 @@ export interface BioReactionResult {
  * Avalia o diferencial de bioimpedância e retorna a reação viva da persona.
  */
 export function evaluateBioReaction(input: BioEvaluationInput): BioReactionResult {
-  const current = input.current;
-  const previous = input.previous;
-  const baseline = input.baseline || previous || current;
-  const mascotId: MascotId = input.mascotId || 'tita';
+  const safeInput = input || ({} as any);
+  const rawCurWeight = Number(safeInput.current?.weightKg);
+  const current: BioDataPoint = (safeInput.current && !isNaN(rawCurWeight) && isFinite(rawCurWeight) && rawCurWeight > 0)
+    ? safeInput.current
+    : { weightKg: 70.0, date: new Date().toISOString().split('T')[0] };
+
+  const previous = safeInput.previous;
+  const baseline = safeInput.baseline || previous || current;
+  const mascotId: MascotId = safeInput.mascotId === 'gaia' ? 'gaia' : 'tita';
   const mascotName = mascotId === 'gaia' ? 'Gaia' : 'Titã';
-  const sex: BiologicalSex = input.sex || (mascotId === 'gaia' ? 'female' : 'male');
-  const height = input.heightCm || 170;
-  const daysSince = input.daysSinceLastCheckin || 7;
+  const sex: BiologicalSex = safeInput.sex || (mascotId === 'gaia' ? 'female' : 'male');
+  const height = safeInput.heightCm || 170;
+  const daysSince = safeInput.daysSinceLastCheckin || 7;
 
   // 1. Cálculos de Deltas Imediatos (apenas se previous existir com peso biológico plausível > 20kg)
-  const hasValidPrevious = !!(previous && previous.weightKg && previous.weightKg > 20);
+  const hasValidPrevious = !!(previous && previous.weightKg && previous.weightKg > 20 && !isNaN(previous.weightKg));
   const weightDeltaKg = hasValidPrevious ? Math.round((current.weightKg - previous.weightKg) * 10) / 10 : 0;
   
   let fatDeltaPct: number | null = null;

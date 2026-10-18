@@ -28,7 +28,11 @@ export function analyzeWeightTrend(
   records: WeightRecord[],
   referenceDate: Date = new Date()
 ): TrendAnalysis {
-  if (!records || records.length === 0) {
+  const safeRecords = (Array.isArray(records) ? records : []).filter(
+    (r) => r && r.date && typeof r.weight_kg === 'number' && !isNaN(r.weight_kg) && isFinite(r.weight_kg) && r.weight_kg > 0
+  );
+
+  if (safeRecords.length === 0) {
     return {
       currentWeight: null,
       movingAverage7d: null,
@@ -41,26 +45,30 @@ export function analyzeWeightTrend(
     };
   }
 
+  const safeRefDate = (referenceDate instanceof Date && !isNaN(referenceDate.getTime()))
+    ? referenceDate
+    : new Date();
+
   // Ordena por data decrescente
-  const sorted = [...records].sort(
+  const sorted = [...safeRecords].sort(
     (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
   );
 
   const latestWeight = sorted[0].weight_kg;
 
   // Filtra registros dos últimos 7 dias a partir da data de referência
-  const refTime = referenceDate.getTime();
+  const refTime = safeRefDate.getTime();
   const sevenDaysAgo = refTime - 7 * 24 * 60 * 60 * 1000;
   const fourteenDaysAgo = refTime - 14 * 24 * 60 * 60 * 1000;
 
   const currentWindowRecords = sorted.filter((r) => {
     const t = new Date(r.date).getTime();
-    return t >= sevenDaysAgo && t <= refTime;
+    return !isNaN(t) && t >= sevenDaysAgo && t <= refTime;
   });
 
   const previousWindowRecords = sorted.filter((r) => {
     const t = new Date(r.date).getTime();
-    return t >= fourteenDaysAgo && t < sevenDaysAgo;
+    return !isNaN(t) && t >= fourteenDaysAgo && t < sevenDaysAgo;
   });
 
   const sampleCount = currentWindowRecords.length;
@@ -125,6 +133,10 @@ export function explainDailyFluctuation(
   todayWeight: number,
   yesterdayWeight: number
 ): string | null {
+  if (typeof todayWeight !== 'number' || isNaN(todayWeight) || !isFinite(todayWeight) ||
+      typeof yesterdayWeight !== 'number' || isNaN(yesterdayWeight) || !isFinite(yesterdayWeight)) {
+    return null;
+  }
   const diff = todayWeight - yesterdayWeight;
   if (diff >= 0.8) {
     return `Seu peso subiu ${diff.toFixed(1)} kg desde ontem. Variações rápidas como esta decorrem de retenção de líquidos, ingestão recente de sódio ou carboidratos, não de ganho de gordura.`;
