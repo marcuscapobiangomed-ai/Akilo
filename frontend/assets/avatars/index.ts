@@ -47,7 +47,11 @@ export const MASCOT_IMAGES: Record<string, any> = {
 };
 
 export function getMascotImage(assetKey: string): any {
-  return MASCOT_IMAGES[assetKey] || MASCOT_IMAGES.tita_robust;
+  if (assetKey && MASCOT_IMAGES[assetKey]) return MASCOT_IMAGES[assetKey];
+  if (assetKey && assetKey.startsWith('gaia')) {
+    return MASCOT_IMAGES.gaia_athletic;
+  }
+  return MASCOT_IMAGES.tita_robust;
 }
 
 /**

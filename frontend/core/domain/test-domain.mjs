@@ -453,7 +453,7 @@ assert.ok(resEvolution.evolution.newStageLevel > 1, 'Novo nível de estágio dev
 console.log('✓ 15. bioReactionEngine: 8 Cenários clínicos de bioimpedância, metamorfose de shape e falas reais 100% validados.');
 
 // 16. Teste de Paridade 1:1 dos 10 Marcos Granulares da Gaia e do Titã
-import { getDetailedMilestones, evaluateGainScenario, evaluateHypertrophyLadder } from './avatarEngine.ts';
+import { getDetailedMilestones, evaluateGainScenario, evaluateHypertrophyLadder, evaluateMilestoneLadder } from './avatarEngine.ts';
 
 const gaiaMilestones = getDetailedMilestones('gaia');
 const titaMilestones = getDetailedMilestones('tita');
@@ -558,7 +558,64 @@ assert.equal(valkyrie.assetKey, 'gaia_m10');
 
 console.log('✓ 20. avatarEngine: AssetKeys dos modelos 2D (10 Marcos, Ganhos e Hipertrofia) 100% integrados e validados.');
 
+// 21. Teste de Funcionamento 2D dos 10 Marcos do Titã e da Gaia
+import fs from 'fs';
+import path from 'path';
+
+// 21.1 Atribuição por peso antropométrico da esteira oficial (mesmo com progresso zero)
+const titaM10 = evaluateMilestoneLadder('tita', 0, 70.0);
+assert.equal(titaM10.milestoneLevel, 10, 'Titã com 70kg deve ser Marco 10');
+assert.equal(titaM10.milestoneAssetKey, 'tita_m10');
+
+const titaM3 = evaluateMilestoneLadder('tita', 0, 88.0);
+assert.equal(titaM3.milestoneLevel, 3, 'Titã com 88kg deve ser Marco 3');
+assert.equal(titaM3.milestoneAssetKey, 'tita_m3');
+
+const gaiaM10 = evaluateMilestoneLadder('gaia', 0, 58.0);
+assert.equal(gaiaM10.milestoneLevel, 10, 'Gaia com 58kg deve ser Marco 10');
+assert.equal(gaiaM10.milestoneAssetKey, 'gaia_m10');
+
+const gaiaM6 = evaluateMilestoneLadder('gaia', 0, 68.0);
+assert.equal(gaiaM6.milestoneLevel, 6, 'Gaia com 68kg deve ser Marco 6');
+assert.equal(gaiaM6.milestoneAssetKey, 'gaia_m6');
+
+// 21.2 Integridade das imagens 2D físicas no sistema de arquivos
+const assetsDir = path.resolve('frontend/assets/avatars/milestones');
+const requiredMilestoneFiles = [
+  'tita_m1.jpg', 'tita_m2.jpg', 'tita_m3.jpg', 'tita_m4.jpg', 'tita_m5.jpg',
+  'tita_m6.jpg', 'tita_m7.jpg', 'tita_m8.jpg', 'tita_m9.jpg', 'tita_m10.jpg',
+  'tita_gain_water.jpg', 'tita_gain_rebound.jpg', 'tita_gain_hypertrophy.jpg',
+  'tita_h_juggernaut.jpg', 'tita_h_colosso.jpg',
+  'gaia_m1.png', 'gaia_m2.png', 'gaia_m3.png', 'gaia_m4.png', 'gaia_m5.png',
+  'gaia_m6.jpg', 'gaia_m7.jpg', 'gaia_m8.jpg', 'gaia_m9.jpg', 'gaia_m10.jpg',
+  'gaia_gain_water.png', 'gaia_gain_rebound.png', 'gaia_gain_hypertrophy.jpg',
+];
+
+for (const file of requiredMilestoneFiles) {
+  const filePath = path.join(assetsDir, file);
+  assert.ok(fs.existsSync(filePath), `Arquivo de imagem 2D deve existir: ${file}`);
+  const stats = fs.statSync(filePath);
+  assert.ok(stats.size > 10000, `Arquivo de imagem 2D não pode estar corrompido ou vazio: ${file}`);
+}
+
+// 21.3 Verificação de Ausência de Artefatos Robóticos na Gaia
+const allGaiaMilestones = getDetailedMilestones('gaia');
+for (const m of allGaiaMilestones) {
+  const textBlob = `${m.name} ${m.quote} ${m.bodyStateDescription} ${m.badge}`.toLowerCase();
+  assert.ok(!textBlob.includes('robô') && !textBlob.includes('robo') && !textBlob.includes('cyborg') && !textBlob.includes('mecânic'), 
+    `Marco ${m.level} da Gaia não deve conter menção a robô ou partes mecânicas`);
+}
+
+// 21.4 Critérios Clínicos ABESO nos marcos de Titã e Gaia
+const gaiaM6Detailed = allGaiaMilestones.find(m => m.level === 6);
+assert.ok(gaiaM6Detailed.waistCm < 80, 'Marco 6 da Gaia deve ter cintura < 80cm (Corte ABESO feminino)');
+const titaM6Detailed = getDetailedMilestones('tita').find(m => m.level === 6);
+assert.ok(titaM6Detailed.waistCm < 90, 'Marco 6 do Titã deve ter cintura < 90cm (Corte ABESO masculino)');
+
+console.log('✓ 21. avatarEngine: Funcionamento 2D integral de todos os marcos de Titã e Gaia (antropometria, arquivos físicos e ABESO) 100% validado.');
+
 console.log('\n🎉 TODOS OS TESTES DOS MOTORES DE DOMÍNIO PASSARAM COM SUCESSO (100% ALINHADOS ÀS DIRETRIZES BRASILEIRAS)!');
+
 
 
 

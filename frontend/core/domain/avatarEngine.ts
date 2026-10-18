@@ -193,215 +193,47 @@ export interface MilestoneEvaluation {
 }
 
 /**
- * Calcula o marco de progressão granular (Níveis 1 a 10) para Titã ou Gaia.
+ * Calcula o marco de progressão granular (Níveis 1 a 10) para Titã ou Gaia,
+ * ponderando o avanço na meta pessoal (progresso relativo) e a faixa antropométrica
+ * atingida pelo peso real na esteira oficial (peso absoluto).
  */
-export function evaluateMilestoneLadder(mascotId: MascotId, progressPct: number): MilestoneEvaluation {
-  if (mascotId === 'gaia') {
-    if (progressPct < 10) {
-      return {
-        milestoneLevel: 1,
-        milestoneName: 'O Despertar da Guerreira',
-        milestoneBadge: 'Aquecimento Pesado',
-        milestoneIcon: 'gauge_red',
-        milestoneQuote: 'Aqui é o ponto de largada! Vamos acelerar esse metabolismo e vencer com foco!',
-        milestoneAssetKey: 'gaia_m1',
-        unlockedCosmetics: ['Faixa Vermelha', 'Toalha de Treino', 'Luvas Berry Clássicas'],
-      };
-    } else if (progressPct < 20) {
-      return {
-        milestoneLevel: 2,
-        milestoneName: 'Quebra do Inchaço',
-        milestoneBadge: 'Retenção Zero',
-        milestoneIcon: 'gauge_yellow',
-        milestoneQuote: 'Primeiros litros de inchaço eliminados! Meu rosto afinou e a postura tá firme!',
-        milestoneAssetKey: 'gaia_m2',
-        unlockedCosmetics: ['Toalha nos Ombros', 'Top Esportivo Básico'],
-      };
-    } else if (progressPct < 30) {
-      return {
-        milestoneLevel: 3,
-        milestoneName: 'Desinchaço Notável',
-        milestoneBadge: 'Alívio Articular',
-        milestoneIcon: 'flame_amber',
-        milestoneQuote: 'A queima ativa começou! A toalha foi pro cinto e as roupas já estão mais folgadas!',
-        milestoneAssetKey: 'gaia_m3',
-        unlockedCosmetics: ['Faixa Verde Esmeralda', 'Toalha no Cinto'],
-      };
-    } else if (progressPct < 40) {
-      return {
-        milestoneLevel: 4,
-        milestoneName: 'Ativação Metabólica',
-        milestoneBadge: 'Metabolismo Turbo',
-        milestoneIcon: 'leaf_eco',
-        milestoneQuote: 'Queima contínua ativada! Cada refeição limpa protege o tônus e queima gordura!',
-        milestoneAssetKey: 'gaia_m4',
-        unlockedCosmetics: ['Top com Costura Reforçada', 'Tênis de Treino Pro'],
-      };
-    } else if (progressPct < 50) {
-      return {
-        milestoneLevel: 5,
-        milestoneName: 'Fronteira da Saúde',
-        milestoneBadge: 'Coração de Gaia',
-        milestoneIcon: 'heart_shield',
-        milestoneQuote: 'Saímos da faixa de risco severo! Coração protegido e medidas caindo com elegância!',
-        milestoneAssetKey: 'gaia_m5',
-        unlockedCosmetics: ['Insígnia Coração de Gaia', 'Luvas Berry com Frisos Ouro Rosa'],
-      };
-    } else if (progressPct < 60) {
-      return {
-        milestoneLevel: 6,
-        milestoneName: 'Cintura de Ampulheta (< 80cm)',
-        milestoneBadge: 'Zona Segura ABESO',
-        milestoneIcon: 'lightning_cyan',
-        milestoneQuote: 'Cintura abaixo de 80 cm! Proteção cardiovascular nível ouro pela ABESO!',
-        milestoneAssetKey: 'gaia_m6',
-        unlockedCosmetics: ['Biker Short de Compressão Esmeralda'],
-      };
-    } else if (progressPct < 70) {
-      return {
-        milestoneLevel: 7,
-        milestoneName: 'Silhueta Esculpida',
-        milestoneBadge: 'V-Taper Feminino',
-        milestoneIcon: 'flame_neon',
-        milestoneQuote: 'A cintura afinou e as pernas ganharam desenho e tônus! Curvas atléticas de respeito!',
-        milestoneAssetKey: 'gaia_m7',
-        unlockedCosmetics: ['Tênis Edição Especial Turbo'],
-      };
-    } else if (progressPct < 80) {
-      return {
-        milestoneLevel: 8,
-        milestoneName: 'Linhas de Definição (11-Line Abs)',
-        milestoneBadge: 'Definição Plena',
-        milestoneIcon: 'medal_silver',
-        milestoneQuote: 'As linhas do abdômen despontaram! Tônus e firmeza esculpidos com comida de verdade!',
-        milestoneAssetKey: 'gaia_m8',
-        unlockedCosmetics: ['Faixa Grafite Elite', 'Top Preto Carbono'],
-      };
-    } else if (progressPct < 90) {
-      return {
-        milestoneLevel: 9,
-        milestoneName: 'O Limiar do Pódio Feminino',
-        milestoneBadge: 'Pré-Campeã',
-        milestoneIcon: 'trophy_gold',
-        milestoneQuote: 'Estamos a um passo da coroa! Foco total e consistência de ferro nessa reta final!',
-        milestoneAssetKey: 'gaia_m9',
-        unlockedCosmetics: ['Luvas Berry com Punhos Dourados GAIA'],
-      };
-    } else {
-      return {
-        milestoneLevel: 10,
-        milestoneName: 'Gaia Campeã Suprema',
-        milestoneBadge: 'Campeã Soberana',
-        milestoneIcon: 'star_gold',
-        milestoneQuote: 'Coroa de louros merecida! Transformação plena, saúde de ferro e beleza radiante!',
-        milestoneAssetKey: 'gaia_m10',
-        unlockedCosmetics: ['Tiara de Louros com Esmeralda', 'Pódio de Campeã', 'Aura Cósmica'],
-      };
-    }
-  } else {
-    // Titã
-    if (progressPct < 10) {
-      return {
-        milestoneLevel: 1,
-        milestoneName: 'O Despertar do Peso-Pesado',
-        milestoneBadge: 'Aquecimento Pesado',
-        milestoneIcon: 'gauge_red',
-        milestoneQuote: 'Aqui é peso-pesado! Vamos derreter essa camada na balança com garra total!',
-        milestoneAssetKey: 'tita_m1',
-        unlockedCosmetics: ['Faixa Vermelha', 'Toalha no Ombro', 'Luvas Vermelhas Clássicas'],
-      };
-    } else if (progressPct < 20) {
-      return {
-        milestoneLevel: 2,
-        milestoneName: 'Quebra da Retenção',
-        milestoneBadge: 'Retenção Zero',
-        milestoneIcon: 'gauge_yellow',
-        milestoneQuote: 'Primeiros quilos de água eliminados! Rosto desinchando e guarda levantada!',
-        milestoneAssetKey: 'tita_m2',
-        unlockedCosmetics: ['Toalha nos Ombros (Boxeador)', 'Bermuda Verde Tradicional'],
-      };
-    } else if (progressPct < 30) {
-      return {
-        milestoneLevel: 3,
-        milestoneName: 'Desinchaço Notável',
-        milestoneBadge: 'Alívio Articular',
-        milestoneIcon: 'flame_amber',
-        milestoneQuote: 'Queima ativa ligada! A toalha foi pro cinto e as articulações tão mais leves!',
-        milestoneAssetKey: 'tita_m3',
-        unlockedCosmetics: ['Toalha no Cinto', 'Faixa Verde de Treino'],
-      };
-    } else if (progressPct < 40) {
-      return {
-        milestoneLevel: 4,
-        milestoneName: 'Transição & Queima Ativa',
-        milestoneBadge: 'Queima Constante',
-        milestoneIcon: 'leaf_eco',
-        milestoneQuote: 'Menos volume na balança e postura de combate! O inchaço sumiu de vez!',
-        milestoneAssetKey: 'tita_m4',
-        unlockedCosmetics: ['Bermuda com Costura Reforçada', 'Tênis de Treino Pro'],
-      };
-    } else if (progressPct < 50) {
-      return {
-        milestoneLevel: 5,
-        milestoneName: 'Fronteira da Saúde',
-        milestoneBadge: 'Coração de Titã',
-        milestoneIcon: 'heart_shield',
-        milestoneQuote: 'Queda de risco severo! Coração blindado e medidas descendo a cada pesagem!',
-        milestoneAssetKey: 'tita_m5',
-        unlockedCosmetics: ['Insígnia Coração de Titã no Peitoral'],
-      };
-    } else if (progressPct < 60) {
-      return {
-        milestoneLevel: 6,
-        milestoneName: 'Cintura de Aço (Zona ABESO)',
-        milestoneBadge: 'Cintura Segura',
-        milestoneIcon: 'lightning_cyan',
-        milestoneQuote: 'Cintura abaixo de 90 cm! Saímos oficialmente da zona de perigo cardiovascular!',
-        milestoneAssetKey: 'tita_m6',
-        unlockedCosmetics: ['Luvas com Faixas de Fibra de Carbono'],
-      };
-    } else if (progressPct < 70) {
-      return {
-        milestoneLevel: 7,
-        milestoneName: 'Aceleração & V-Taper',
-        milestoneBadge: 'V-Taper Ativo',
-        milestoneIcon: 'flame_neon',
-        milestoneQuote: 'Ombros largos e cintura fina! O tronco em V tá aparecendo com força!',
-        milestoneAssetKey: 'tita_m7',
-        unlockedCosmetics: ['Tênis Edição Corrida Turbo'],
-      };
-    } else if (progressPct < 80) {
-      return {
-        milestoneLevel: 8,
-        milestoneName: 'Primeiros Cortes',
-        milestoneBadge: 'Definição Inicial',
-        milestoneIcon: 'medal_silver',
-        milestoneQuote: 'Linha Alba e oblíquos marcando! A musculatura tá rasgando a gordura!',
-        milestoneAssetKey: 'tita_m8',
-        unlockedCosmetics: ['Faixa Grafite Elite', 'Luvas com Friso Dourado'],
-      };
-    } else if (progressPct < 90) {
-      return {
-        milestoneLevel: 9,
-        milestoneName: 'O Limiar do Pódio',
-        milestoneBadge: 'Pré-Campeão',
-        milestoneIcon: 'trophy_gold',
-        milestoneQuote: 'Quase no topo do pódio! Falta só um ajuste fino pra coroar esse shape!',
-        milestoneAssetKey: 'tita_m9',
-        unlockedCosmetics: ['Luvas com Punhos Dourados'],
-      };
-    } else {
-      return {
-        milestoneLevel: 10,
-        milestoneName: 'Campeão Titânico Supremo',
-        milestoneBadge: 'Forma Lendária',
-        milestoneIcon: 'star_gold',
-        milestoneQuote: 'Shape blindado de campeão lendário! Peso cravado e saúde no topo do mundo!',
-        milestoneAssetKey: 'tita_m10',
-        unlockedCosmetics: ['Tiara Dourada', 'Fundo Holográfico Campeão', 'Aura Dourada'],
-      };
+export function evaluateMilestoneLadder(
+  mascotId: MascotId,
+  progressPct: number,
+  currentWeightKg?: number
+): MilestoneEvaluation {
+  const milestones = getDetailedMilestones(mascotId);
+
+  // 1. Nível por progresso relativo pessoal (1 a 10)
+  const clampedPct = Math.max(0, Math.min(100, progressPct));
+  let progressLevel = 1;
+  if (clampedPct >= 90) progressLevel = 10;
+  else progressLevel = Math.floor(clampedPct / 10) + 1;
+
+  // 2. Nível por peso antropométrico da esteira oficial (se peso informado)
+  let weightLevel = 1;
+  if (currentWeightKg && currentWeightKg > 0) {
+    for (let i = milestones.length - 1; i >= 0; i--) {
+      if (currentWeightKg <= milestones[i].weightKg + 0.1) {
+        weightLevel = milestones[i].level;
+        break;
+      }
     }
   }
+
+  // O marco final é o maior entre o progresso da meta e o peso real alcançado
+  const finalLevel = Math.max(progressLevel, weightLevel);
+  const m = milestones[finalLevel - 1] || milestones[0];
+
+  return {
+    milestoneLevel: m.level,
+    milestoneName: m.name,
+    milestoneBadge: m.badge,
+    milestoneIcon: m.icon,
+    milestoneQuote: m.quote,
+    milestoneAssetKey: m.assetKey,
+    unlockedCosmetics: m.unlockedCosmetics,
+  };
 }
 
 export interface DetailedMilestone {
@@ -1566,7 +1398,7 @@ export function evaluateMascot(input: MascotInput): MascotEvaluation {
     customization,
   };
 
-  const milestoneData = evaluateMilestoneLadder(mascotId, progressPercentage);
+  const milestoneData = evaluateMilestoneLadder(mascotId, progressPercentage, weight);
 
   return {
     mascotId,

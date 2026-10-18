@@ -36,7 +36,7 @@ import { useToast } from '../../components/Toast';
 import { ProfileSkeleton } from '../../components/SkeletonLoader';
 import { dataEvents } from '../../core/dataEvents';
 import { calculateBMI, estimateBMR, evaluateMetabolicAge, evaluateBodyFat, BiologicalSex } from '../../core/domain/bodyComposition';
-import { evaluateMascot, getDetailedMilestones, type MascotId, type MascotCustomization } from '../../core/domain/avatarEngine';
+import { evaluateMascot, getDetailedMilestones, type MascotId, type MascotCustomization, type DetailedMilestone } from '../../core/domain/avatarEngine';
 import { getMascotImage } from '../../assets/avatars';
 import { LivingAvatar3D } from '../../components/LivingAvatar3D';
 import { MascotStudioModal } from '../../components/MascotStudioModal';
@@ -90,6 +90,8 @@ export default function Profile() {
   const [triggerMascotInspect, setTriggerMascotInspect] = useState(false);
   const [bioComparison, setBioComparison] = useState<any>(null);
   const [milestoneLadderModalVisible, setMilestoneLadderModalVisible] = useState(false);
+  const [previewMilestoneLevel, setPreviewMilestoneLevel] = useState<number | null>(null);
+  const [sharedMilestone, setSharedMilestone] = useState<DetailedMilestone | null>(null);
 
   // Modal de Edição Completa de Perfil & Bioimpedância
   const [editProfileModalVisible, setEditProfileModalVisible] = useState(false);
@@ -247,6 +249,8 @@ export default function Profile() {
       await api.put('/api/profile/', { avatar_mascot_id: mascotId });
       setProfile((prev: any) => prev ? { ...prev, avatar_mascot_id: mascotId } : { avatar_mascot_id: mascotId });
       setEditProfile((prev) => ({ ...prev, avatarMascotId: mascotId }));
+      setPreviewMilestoneLevel(null);
+      setSharedMilestone(null);
       showToast(`Mascote alterado para ${mascotId === 'tita' ? 'Titã 🥊' : 'Gaia 👑'}!`, 'success');
       setSelectMascotModalVisible(false);
       setTriggerMascotInspect(true);
@@ -652,133 +656,207 @@ export default function Profile() {
             </View>
           ) : (
             /* MODO 2D: Ilustração de Colecionador com 10 Marcos Granulares Oficiais */
-            <View style={styles.mascot2DContainer}>
-              <View style={styles.mascotBodyRow}>
-                <View style={styles.mascotAvatarWrapper}>
-                  <Image 
-                    source={getMascotImage(mascotEval.milestoneAssetKey || mascotEval.assetKey)} 
-                    style={styles.mascotAvatarImage} 
-                    resizeMode="contain" 
-                  />
-                  <View style={[styles.mascotArchetypeBadge, { backgroundColor: `${mascotEval.badgeColor}25`, borderColor: mascotEval.badgeColor }]}>
-                    <Text style={[styles.mascotArchetypeText, { color: mascotEval.badgeColor }]}>
-                      MARCO {mascotEval.milestoneLevel}/10 • {mascotEval.milestoneBadge}
-                    </Text>
-                  </View>
-                </View>
+            (() => {
+              const detailedMilestones = getDetailedMilestones(currentMascotId);
+              const activeMilestone = previewMilestoneLevel
+                ? detailedMilestones.find((m) => m.level === previewMilestoneLevel) || null
+                : null;
+              const displayAssetKey = activeMilestone
+                ? activeMilestone.assetKey
+                : (mascotEval.milestoneAssetKey || mascotEval.assetKey);
+              const displayBadgeColor = activeMilestone ? activeMilestone.badgeColor : mascotEval.badgeColor;
+              const displayLevel = activeMilestone ? activeMilestone.level : mascotEval.milestoneLevel;
+              const displayBadge = activeMilestone ? activeMilestone.badge : mascotEval.milestoneBadge;
+              const displayName = activeMilestone ? activeMilestone.name : (mascotEval.milestoneName || mascotEval.stageName);
+              const displayDesc = activeMilestone ? activeMilestone.bodyStateDescription : mascotEval.stageDescription;
+              const displayQuote = activeMilestone ? activeMilestone.quote : (mascotEval.milestoneQuote || mascotEval.flavorQuote);
+              const displayCosmetics = activeMilestone?.unlockedCosmetics || mascotEval.unlockedCosmetics;
 
-                <View style={styles.mascotDetails}>
-                  <Text style={styles.mascotStageTitle}>{mascotEval.milestoneName || mascotEval.stageName}</Text>
-                  <Text style={styles.mascotStageDesc}>{mascotEval.stageDescription}</Text>
-                  
-                  <View style={styles.speechBubble}>
-                    <Sparkles color="#eab308" size={14} style={{ marginTop: 2 }} />
-                    <Text style={styles.speechText}>"{mascotEval.milestoneQuote || mascotEval.flavorQuote}"</Text>
-                  </View>
-
-                  {/* Recompensa Cosmética Desbloqueada */}
-                  {mascotEval.unlockedCosmetics && mascotEval.unlockedCosmetics.length > 0 && (
-                    <View style={styles.cosmeticBadgePill}>
-                      <Trophy color="#eab308" size={11} />
-                      <Text style={styles.cosmeticBadgePillText} numberOfLines={1}>
-                        🎁 {mascotEval.unlockedCosmetics[0]}
-                      </Text>
+              return (
+                <View style={styles.mascot2DContainer}>
+                  {/* Banner de Modo Prévia do Marco */}
+                  {activeMilestone && (
+                    <View style={styles.previewModeBanner}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                        <Eye color="#38bdf8" size={13} />
+                        <Text style={styles.previewModeBannerText} numberOfLines={1}>
+                          PRÉVIA: M{activeMilestone.level} • {activeMilestone.name} ({activeMilestone.hudDisplay})
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.restoreShapeBtn}
+                        onPress={() => {
+                          soundHaptics.triggerLightTap();
+                          setPreviewMilestoneLevel(null);
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.restoreShapeBtnText}>Restaurar Atual</Text>
+                      </TouchableOpacity>
                     </View>
                   )}
 
-                  {/* Botões de Ação do Modo 2D */}
-                  <View style={styles.mascot2DActionsRow}>
-                    <TouchableOpacity
-                      style={styles.openLadderBtn}
-                      onPress={() => {
-                        soundHaptics.triggerLightTap();
-                        setMilestoneLadderModalVisible(true);
-                      }}
-                      activeOpacity={0.85}
-                    >
-                      <Trophy color="#22c55e" size={12} />
-                      <Text style={styles.openLadderBtnText}>Ver 10 Marcos</Text>
-                    </TouchableOpacity>
+                  <View style={styles.mascotBodyRow}>
+                    <View style={styles.mascotAvatarWrapper}>
+                      <Image 
+                        source={getMascotImage(displayAssetKey)} 
+                        style={styles.mascotAvatarImage} 
+                        resizeMode="contain" 
+                      />
+                      <View style={[styles.mascotArchetypeBadge, { backgroundColor: `${displayBadgeColor}25`, borderColor: displayBadgeColor }]}>
+                        <Text style={[styles.mascotArchetypeText, { color: displayBadgeColor }]}>
+                          MARCO {displayLevel}/10 • {displayBadge}
+                        </Text>
+                      </View>
+                    </View>
 
-                    <TouchableOpacity
-                      style={styles.share2DBtn}
-                      onPress={() => {
-                        soundHaptics.triggerLightTap();
-                        setShowVictoryCard(true);
-                      }}
-                      activeOpacity={0.85}
-                    >
-                      <Share2 color="#38bdf8" size={12} />
-                      <Text style={styles.share2DBtnText}>Card Stories</Text>
-                    </TouchableOpacity>
+                    <View style={styles.mascotDetails}>
+                      <Text style={styles.mascotStageTitle}>{displayName}</Text>
+                      <Text style={styles.mascotStageDesc}>{displayDesc}</Text>
+                      
+                      <View style={styles.speechBubble}>
+                        <Sparkles color="#eab308" size={14} style={{ marginTop: 2 }} />
+                        <Text style={styles.speechText}>"{displayQuote}"</Text>
+                      </View>
+
+                      {/* Recompensa Cosmética Desbloqueada */}
+                      {displayCosmetics && displayCosmetics.length > 0 && (
+                        <View style={styles.cosmeticBadgePill}>
+                          <Trophy color="#eab308" size={11} />
+                          <Text style={styles.cosmeticBadgePillText} numberOfLines={1}>
+                            🎁 {displayCosmetics[0]}
+                          </Text>
+                        </View>
+                      )}
+
+                      {/* Botões de Ação do Modo 2D */}
+                      <View style={styles.mascot2DActionsRow}>
+                        <TouchableOpacity
+                          style={styles.openLadderBtn}
+                          onPress={() => {
+                            soundHaptics.triggerLightTap();
+                            setMilestoneLadderModalVisible(true);
+                          }}
+                          activeOpacity={0.85}
+                        >
+                          <Trophy color="#22c55e" size={12} />
+                          <Text style={styles.openLadderBtnText}>Ver 10 Marcos</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={styles.share2DBtn}
+                          onPress={() => {
+                            soundHaptics.triggerLightTap();
+                            if (activeMilestone) {
+                              setSharedMilestone(activeMilestone);
+                            } else {
+                              setSharedMilestone(null);
+                            }
+                            setShowVictoryCard(true);
+                          }}
+                          activeOpacity={0.85}
+                        >
+                          <Share2 color="#38bdf8" size={12} />
+                          <Text style={styles.share2DBtnText}>Card Stories</Text>
+                        </TouchableOpacity>
+
+                        {activeMilestone && (
+                          <TouchableOpacity
+                            style={styles.resetShape2DBtn}
+                            onPress={() => {
+                              soundHaptics.triggerLightTap();
+                              setPreviewMilestoneLevel(null);
+                            }}
+                            activeOpacity={0.85}
+                          >
+                            <Text style={styles.resetShape2DBtnText}>Shape Atual</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </View>
                   </View>
-                </View>
-              </View>
 
-              {/* Trilho Horizontal dos 10 Marcos com Navegação */}
-              <View style={styles.milestoneTrackSection}>
-                <View style={styles.milestoneTrackHeader}>
-                  <Text style={styles.milestoneTrackTitle}>
-                    Esteira dos 10 Marcos ({currentMascotId === 'gaia' ? 'Gaia' : 'Titã'})
-                  </Text>
-                  <TouchableOpacity
-                    onPress={() => {
-                      soundHaptics.triggerLightTap();
-                      setMilestoneLadderModalVisible(true);
-                    }}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.milestoneTrackSeeAll}>Ver Todos</Text>
-                    <ChevronRight color="#22c55e" size={12} />
-                  </TouchableOpacity>
-                </View>
-
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.milestoneTrackScroll}
-                >
-                  {getDetailedMilestones(currentMascotId).map((m) => {
-                    const isConquered = mascotEval.milestoneLevel >= m.level;
-                    const isCurrent = mascotEval.milestoneLevel === m.level;
-
-                    return (
+                  {/* Trilho Horizontal dos 10 Marcos com Navegação Interativa */}
+                  <View style={styles.milestoneTrackSection}>
+                    <View style={styles.milestoneTrackHeader}>
+                      <Text style={styles.milestoneTrackTitle}>
+                        Esteira dos 10 Marcos ({currentMascotId === 'gaia' ? 'Gaia' : 'Titã'})
+                      </Text>
                       <TouchableOpacity
-                        key={`mini-m-${m.level}`}
-                        style={[
-                          styles.miniMilestoneCard,
-                          isCurrent && styles.miniMilestoneCardCurrent,
-                          isConquered && !isCurrent && styles.miniMilestoneCardConquered,
-                        ]}
                         onPress={() => {
                           soundHaptics.triggerLightTap();
                           setMilestoneLadderModalVisible(true);
                         }}
-                        activeOpacity={0.8}
+                        style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}
+                        activeOpacity={0.7}
                       >
-                        <Image
-                          source={getMascotImage(m.assetKey)}
-                          style={styles.miniMilestoneThumb}
-                          resizeMode="contain"
-                        />
-                        <Text style={[styles.miniMilestoneLevel, isCurrent && { color: '#facc15' }]}>
-                          M{m.level}
-                        </Text>
-                        <Text style={styles.miniMilestoneWeight}>{m.weightKg.toFixed(0)}kg</Text>
-                        {isCurrent ? (
-                          <View style={styles.miniCurrentDot} />
-                        ) : isConquered ? (
-                          <Check color="#22c55e" size={10} style={{ marginTop: 2 }} />
-                        ) : (
-                          <Lock color="#64748b" size={9} style={{ marginTop: 2 }} />
-                        )}
+                        <Text style={styles.milestoneTrackSeeAll}>Ver Todos</Text>
+                        <ChevronRight color="#22c55e" size={12} />
                       </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            </View>
+                    </View>
+
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.milestoneTrackScroll}
+                    >
+                      {detailedMilestones.map((m) => {
+                        const isConquered = mascotEval.milestoneLevel >= m.level;
+                        const isCurrent = mascotEval.milestoneLevel === m.level;
+                        const isPreview = previewMilestoneLevel === m.level;
+
+                        return (
+                          <TouchableOpacity
+                            key={`mini-m-${m.level}`}
+                            style={[
+                              styles.miniMilestoneCard,
+                              isPreview && styles.miniMilestoneCardPreview,
+                              !isPreview && isCurrent && styles.miniMilestoneCardCurrent,
+                              !isPreview && isConquered && !isCurrent && styles.miniMilestoneCardConquered,
+                            ]}
+                            onPress={() => {
+                              soundHaptics.triggerLightTap();
+                              if (previewMilestoneLevel === m.level) {
+                                setPreviewMilestoneLevel(null);
+                              } else {
+                                setPreviewMilestoneLevel(m.level);
+                              }
+                            }}
+                            onLongPress={() => {
+                              soundHaptics.triggerMediumTap();
+                              setMilestoneLadderModalVisible(true);
+                            }}
+                            activeOpacity={0.8}
+                          >
+                            <Image
+                              source={getMascotImage(m.assetKey)}
+                              style={styles.miniMilestoneThumb}
+                              resizeMode="contain"
+                            />
+                            <Text style={[
+                              styles.miniMilestoneLevel,
+                              isPreview ? { color: '#38bdf8' } : (isCurrent ? { color: '#facc15' } : undefined)
+                            ]}>
+                              M{m.level}
+                            </Text>
+                            <Text style={styles.miniMilestoneWeight}>{m.weightKg.toFixed(0)}kg</Text>
+                            {isPreview ? (
+                              <View style={styles.miniPreviewDot} />
+                            ) : isCurrent ? (
+                              <View style={styles.miniCurrentDot} />
+                            ) : isConquered ? (
+                              <Check color="#22c55e" size={10} style={{ marginTop: 2 }} />
+                            ) : (
+                              <Lock color="#64748b" size={9} style={{ marginTop: 2 }} />
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                </View>
+              );
+            })()
           )}
 
           {/* Barra de Evolução Visual de Medidas & Peso Rumo à Forma Campeã */}
@@ -1787,21 +1865,34 @@ export default function Profile() {
       {/* MODAL CARD DE VITÓRIA SOCIAL (STORIES / WHATSAPP) */}
       <ShapeVictoryCardModal
         visible={showVictoryCard}
-        onClose={() => setShowVictoryCard(false)}
+        onClose={() => {
+          setShowVictoryCard(false);
+          setSharedMilestone(null);
+        }}
         mascotName={currentMascotId === 'gaia' ? 'Gaia' : 'Titã'}
-        mascotAssetKey={mascotEval.milestoneAssetKey || mascotEval.assetKey}
-        milestoneLevel={mascotEval.milestoneLevel}
-        milestoneBadge={mascotEval.milestoneBadge}
-        currentWeightKg={currentWeight || bioComparison?.latestBio?.weightKg || 75}
+        mascotAssetKey={
+          sharedMilestone
+            ? sharedMilestone.assetKey
+            : (mascotEval.milestoneAssetKey || mascotEval.assetKey)
+        }
+        milestoneLevel={sharedMilestone ? sharedMilestone.level : mascotEval.milestoneLevel}
+        milestoneBadge={sharedMilestone ? sharedMilestone.badge : mascotEval.milestoneBadge}
+        currentWeightKg={
+          sharedMilestone
+            ? sharedMilestone.weightKg
+            : (currentWeight || bioComparison?.latestBio?.weightKg || 75)
+        }
         initialWeightKg={Number(profile?.initial_weight_kg) || undefined}
         weightDeltaKg={
-          bioComparison?.deltas?.weightDelta !== undefined
-            ? Math.abs(bioComparison.deltas.weightDelta)
-            : undefined
+          sharedMilestone
+            ? (profile?.initial_weight_kg ? Math.max(0, Number(profile.initial_weight_kg) - sharedMilestone.weightKg) : undefined)
+            : (bioComparison?.deltas?.weightDelta !== undefined
+                ? Math.abs(bioComparison.deltas.weightDelta)
+                : undefined)
         }
-        bodyFatPct={profile?.body_fat_pct}
-        muscleMassPct={profile?.muscle_mass_pct}
-        waistCm={profile?.waist_cm}
+        bodyFatPct={sharedMilestone ? sharedMilestone.bodyFatPct : profile?.body_fat_pct}
+        muscleMassPct={sharedMilestone ? sharedMilestone.muscleMassPct : profile?.muscle_mass_pct}
+        waistCm={sharedMilestone ? sharedMilestone.waistCm : profile?.waist_cm}
         streakDays={7}
         userName={profile?.name || 'Guerreiro(a)'}
       />
@@ -1813,7 +1904,8 @@ export default function Profile() {
         mascotId={currentMascotId}
         currentMilestoneLevel={mascotEval.milestoneLevel}
         currentWeightKg={currentWeight || bioComparison?.latestBio?.weightKg || 70}
-        onShareMilestone={() => {
+        onShareMilestone={(milestone) => {
+          setSharedMilestone(milestone);
           setMilestoneLadderModalVisible(false);
           setShowVictoryCard(true);
         }}
@@ -2385,6 +2477,49 @@ const styles = StyleSheet.create({
   mascot2DContainer: {
     marginBottom: 10,
   },
+  previewModeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.35)',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 8,
+  },
+  previewModeBannerText: {
+    color: '#38bdf8',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  restoreShapeBtn: {
+    backgroundColor: '#0284c7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  restoreShapeBtnText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  resetShape2DBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  resetShape2DBtnText: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: '700',
+  },
   cosmeticBadgePill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2480,6 +2615,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
   },
+  miniMilestoneCardPreview: {
+    borderColor: '#38bdf8',
+    backgroundColor: 'rgba(56, 189, 248, 0.2)',
+    shadowColor: '#38bdf8',
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+  },
   miniMilestoneCardCurrent: {
     borderColor: '#eab308',
     backgroundColor: 'rgba(234, 179, 8, 0.15)',
@@ -2506,6 +2648,13 @@ const styles = StyleSheet.create({
     color: '#cbd5e1',
     fontSize: 9,
     fontWeight: '600',
+  },
+  miniPreviewDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#38bdf8',
+    marginTop: 4,
   },
   miniCurrentDot: {
     width: 6,
