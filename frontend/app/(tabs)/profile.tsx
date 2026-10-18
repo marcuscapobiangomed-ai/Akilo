@@ -319,19 +319,31 @@ export default function Profile() {
 
       await api.put('/api/profile/', payload);
 
-      // Sincroniza também no log de peso de hoje se o peso tiver sido alterado
+      // Sincroniza também no log de checkin/peso de hoje se o peso tiver sido informado
       if (parsedWeight && parsedWeight > 0) {
         const today = new Date().toISOString().split('T')[0];
         try {
-          await api.post('/api/weight/', {
+          await api.post('/api/checkin/log', {
             date: today,
             weight_kg: parsedWeight,
             body_fat_pct: parsedBodyFat,
             muscle_mass_pct: parsedMuscleMass,
             body_water_pct: parsedBodyWater,
+            waist_cm: parsedWaist,
+            basal_metabolism_kcal: parsedBasal,
+            metabolic_age: parsedMetabolicAge,
           });
         } catch (e) {
-          // Ignora se der erro de conflict ou offline
+          // Fallback para log simples de peso se houver falha
+          try {
+            await api.post('/api/weight/', {
+              date: today,
+              weight_kg: parsedWeight,
+              body_fat_pct: parsedBodyFat,
+              muscle_mass_pct: parsedMuscleMass,
+              body_water_pct: parsedBodyWater,
+            });
+          } catch {}
         }
       }
 

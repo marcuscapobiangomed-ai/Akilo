@@ -227,7 +227,9 @@ export default function Onboarding() {
       const parsedMuscleVal = muscleMass ? parseFloat(muscleMass.replace(',', '.')) : null;
       const parsedWaistVal = waist ? parseFloat(waist.replace(',', '.')) : null;
 
-      // 1. Salvar dados biométricos completos no perfil
+      const today = new Date().toISOString().split('T')[0];
+
+      // 1. Salvar dados biométricos completos no perfil com linha de base inicial (Marco Zero)
       await api.put('/api/profile/', {
         name: fullName.trim() || undefined,
         age: parsedAgeVal,
@@ -242,6 +244,11 @@ export default function Onboarding() {
         goal_type: goal,
         weekly_workouts_target: calculatedTargets.workouts,
         avatar_mascot_id: mascotId,
+        initial_weight_kg: parsedWeightVal,
+        initial_body_fat_pct: parsedFatVal,
+        initial_muscle_mass_pct: parsedMuscleVal,
+        initial_waist_cm: parsedWaistVal,
+        initial_checkin_date: today,
       });
       
       // 2. Salvar metas diárias calculadas com teto SBC de saturadas
@@ -256,16 +263,18 @@ export default function Onboarding() {
       });
       
       // 3. Registrar peso inicial no histórico de peso e checkin de bioimpedância
-      const today = new Date().toISOString().split('T')[0];
       try {
         await api.post('/api/weight/', {
           date: today,
           weight_kg: parsedWeightVal,
+          body_fat_pct: parsedFatVal,
+          muscle_mass_pct: parsedMuscleVal,
         });
       } catch {}
 
       try {
-        await api.post('/api/checkin/record', {
+        await api.post('/api/checkin/log', {
+          date: today,
           weight_kg: parsedWeightVal,
           body_fat_pct: parsedFatVal,
           muscle_mass_pct: parsedMuscleVal,

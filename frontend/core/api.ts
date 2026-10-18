@@ -63,6 +63,7 @@ const EVENT_MAP: Record<string, string[]> = {
   '/api/profile/targets': ['targets_updated'],
   '/api/checkin/skip': ['checkin_skipped'],
   '/api/checkin/log': ['checkin_logged', 'weight_logged', 'profile_updated'],
+  '/api/checkin/record': ['checkin_logged', 'weight_logged', 'profile_updated'],
 };
 
 const emitEvents = (endpoint: string, method: string) => {
@@ -99,22 +100,59 @@ async function executeSupabaseGet(endpoint: string, params?: any): Promise<any> 
     const { data } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
     let profileData: any = data || {};
     try {
-      const [localMascot, localSex, localWaist, localFat, localMuscle, localBirth, localWeight] = await Promise.all([
+      const [
+        localMascot, localSex, localWaist, localFat, localMuscle, localWater,
+        localBasal, localMetaAge, localBirth, localWeight, localInitWeight,
+        localInitFat, localInitMuscle, localInitWaist, localInitDate, localCustom
+      ] = await Promise.all([
         AsyncStorage.getItem(`avatar_mascot_${user.id}`),
         AsyncStorage.getItem(`bio_sex_${user.id}`),
         AsyncStorage.getItem(`bio_waist_${user.id}`),
         AsyncStorage.getItem(`bio_fat_${user.id}`),
         AsyncStorage.getItem(`bio_muscle_${user.id}`),
+        AsyncStorage.getItem(`bio_water_${user.id}`),
+        AsyncStorage.getItem(`bio_basal_${user.id}`),
+        AsyncStorage.getItem(`bio_meta_age_${user.id}`),
         AsyncStorage.getItem(`birth_date_${user.id}`),
         AsyncStorage.getItem(`bio_weight_${user.id}`),
+        AsyncStorage.getItem(`bio_init_weight_${user.id}`),
+        AsyncStorage.getItem(`bio_init_fat_${user.id}`),
+        AsyncStorage.getItem(`bio_init_muscle_${user.id}`),
+        AsyncStorage.getItem(`bio_init_waist_${user.id}`),
+        AsyncStorage.getItem(`bio_init_date_${user.id}`),
+        AsyncStorage.getItem(`avatar_custom_${user.id}`),
       ]);
-      if (localMascot) profileData.avatar_mascot_id = localMascot;
-      if (localSex) profileData.sex = localSex;
-      if (localWaist) profileData.waist_cm = parseFloat(localWaist);
-      if (localFat) profileData.body_fat_pct = parseFloat(localFat);
-      if (localMuscle) profileData.muscle_mass_pct = parseFloat(localMuscle);
-      if (localBirth) profileData.birth_date = localBirth;
-      if (localWeight) profileData.weight_kg = parseFloat(localWeight);
+      if (localMascot && !profileData.avatar_mascot_id) profileData.avatar_mascot_id = localMascot;
+      if (localSex && !profileData.sex) profileData.sex = localSex;
+      if (localWaist && (profileData.waist_cm === undefined || profileData.waist_cm === null)) profileData.waist_cm = parseFloat(localWaist);
+      if (localFat && (profileData.body_fat_pct === undefined || profileData.body_fat_pct === null)) profileData.body_fat_pct = parseFloat(localFat);
+      if (localMuscle && (profileData.muscle_mass_pct === undefined || profileData.muscle_mass_pct === null)) profileData.muscle_mass_pct = parseFloat(localMuscle);
+      if (localWater && (profileData.body_water_pct === undefined || profileData.body_water_pct === null)) profileData.body_water_pct = parseFloat(localWater);
+      if (localBasal && (profileData.basal_metabolism_kcal === undefined || profileData.basal_metabolism_kcal === null)) profileData.basal_metabolism_kcal = parseInt(localBasal, 10);
+      if (localMetaAge && (profileData.metabolic_age === undefined || profileData.metabolic_age === null)) profileData.metabolic_age = parseInt(localMetaAge, 10);
+      if (localBirth && !profileData.birth_date) profileData.birth_date = localBirth;
+      if (localWeight && (profileData.weight_kg === undefined || profileData.weight_kg === null)) profileData.weight_kg = parseFloat(localWeight);
+      if (localInitWeight && (profileData.initial_weight_kg === undefined || profileData.initial_weight_kg === null)) profileData.initial_weight_kg = parseFloat(localInitWeight);
+      if (localInitFat && (profileData.initial_body_fat_pct === undefined || profileData.initial_body_fat_pct === null)) profileData.initial_body_fat_pct = parseFloat(localInitFat);
+      if (localInitMuscle && (profileData.initial_muscle_mass_pct === undefined || profileData.initial_muscle_mass_pct === null)) profileData.initial_muscle_mass_pct = parseFloat(localInitMuscle);
+      if (localInitWaist && (profileData.initial_waist_cm === undefined || profileData.initial_waist_cm === null)) profileData.initial_waist_cm = parseFloat(localInitWaist);
+      if (localInitDate && !profileData.initial_checkin_date) profileData.initial_checkin_date = localInitDate;
+      if (localCustom && !profileData.avatar_customization) {
+        try { profileData.avatar_customization = JSON.parse(localCustom); } catch {}
+      }
+
+      // Sincroniza em cache local se o Supabase retornou dados atualizados
+      if (data) {
+        if (data.avatar_mascot_id) AsyncStorage.setItem(`avatar_mascot_${user.id}`, data.avatar_mascot_id).catch(() => {});
+        if (data.sex) AsyncStorage.setItem(`bio_sex_${user.id}`, data.sex).catch(() => {});
+        if (data.weight_kg !== undefined && data.weight_kg !== null) AsyncStorage.setItem(`bio_weight_${user.id}`, String(data.weight_kg)).catch(() => {});
+        if (data.body_fat_pct !== undefined && data.body_fat_pct !== null) AsyncStorage.setItem(`bio_fat_${user.id}`, String(data.body_fat_pct)).catch(() => {});
+        if (data.muscle_mass_pct !== undefined && data.muscle_mass_pct !== null) AsyncStorage.setItem(`bio_muscle_${user.id}`, String(data.muscle_mass_pct)).catch(() => {});
+        if (data.body_water_pct !== undefined && data.body_water_pct !== null) AsyncStorage.setItem(`bio_water_${user.id}`, String(data.body_water_pct)).catch(() => {});
+        if (data.basal_metabolism_kcal !== undefined && data.basal_metabolism_kcal !== null) AsyncStorage.setItem(`bio_basal_${user.id}`, String(data.basal_metabolism_kcal)).catch(() => {});
+        if (data.metabolic_age !== undefined && data.metabolic_age !== null) AsyncStorage.setItem(`bio_meta_age_${user.id}`, String(data.metabolic_age)).catch(() => {});
+        if (data.waist_cm !== undefined && data.waist_cm !== null) AsyncStorage.setItem(`bio_waist_${user.id}`, String(data.waist_cm)).catch(() => {});
+      }
     } catch {}
     return profileData;
   }
@@ -602,11 +640,38 @@ async function fetchOpenFoodFacts(queryOrBarcode: string): Promise<any[]> {
       };
     }
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('id, name, age, height_cm, weight_kg, body_fat_pct, muscle_mass_pct, body_water_pct, basal_metabolism_kcal, metabolic_age, checkin_frequency_days, preferred_checkin_weekday, last_checkin_date, last_skipped_checkin_date')
-      .eq('id', user.id)
-      .maybeSingle();
+    let profile: any = null;
+    try {
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, name, age, height_cm, weight_kg, body_fat_pct, muscle_mass_pct, body_water_pct, basal_metabolism_kcal, metabolic_age, checkin_frequency_days, preferred_checkin_weekday, last_checkin_date, last_skipped_checkin_date')
+        .eq('id', user.id)
+        .maybeSingle();
+      profile = data;
+    } catch (err) {
+      console.warn('[CheckinStatus] Falha ao consultar status de perfil:', err);
+    }
+
+    // Fallback de medidas se profile ou colunas estiverem nulas/offline
+    if (!profile) {
+      try {
+        const [localWeight, localFat, localMuscle, localWaist] = await Promise.all([
+          AsyncStorage.getItem(`bio_weight_${user.id}`),
+          AsyncStorage.getItem(`bio_fat_${user.id}`),
+          AsyncStorage.getItem(`bio_muscle_${user.id}`),
+          AsyncStorage.getItem(`bio_waist_${user.id}`),
+        ]);
+        profile = {
+          id: user.id,
+          weight_kg: localWeight ? parseFloat(localWeight) : null,
+          body_fat_pct: localFat ? parseFloat(localFat) : null,
+          muscle_mass_pct: localMuscle ? parseFloat(localMuscle) : null,
+          waist_cm: localWaist ? parseFloat(localWaist) : null,
+          checkin_frequency_days: 7,
+          preferred_checkin_weekday: 1,
+        };
+      } catch {}
+    }
 
     const status = evaluateCheckinDue({
       lastCheckinDate: profile?.last_checkin_date,
@@ -806,9 +871,13 @@ async function fetchOpenFoodFacts(queryOrBarcode: string): Promise<any[]> {
         weight_kg: Number(r.weight_kg),
         body_fat_pct: r.body_fat_pct !== null && r.body_fat_pct !== undefined ? Number(r.body_fat_pct) : null,
         muscle_mass_pct: r.muscle_mass_pct !== null && r.muscle_mass_pct !== undefined ? Number(r.muscle_mass_pct) : null,
+        body_water_pct: r.body_water_pct !== null && r.body_water_pct !== undefined ? Number(r.body_water_pct) : null,
+        basal_metabolism_kcal: r.basal_metabolism_kcal !== null && r.basal_metabolism_kcal !== undefined ? Number(r.basal_metabolism_kcal) : null,
         waist_cm: r.waist_cm !== null && r.waist_cm !== undefined ? Number(r.waist_cm) : null,
         visceral_fat: r.visceral_fat !== null && r.visceral_fat !== undefined ? Number(r.visceral_fat) : null,
         metabolic_age: r.metabolic_age !== null && r.metabolic_age !== undefined ? Number(r.metabolic_age) : null,
+        bmi: r.bmi !== null && r.bmi !== undefined ? Number(r.bmi) : null,
+        notes: r.notes || null,
       });
     }
 
@@ -892,12 +961,36 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
 
     // Peso
     if (endpoint === '/api/weight/') {
+      const weightKg = Number(body?.weight_kg);
       const { data, error } = await supabase
         .from('weight_logs')
         .upsert({ user_id: user!.id, ...body }, { onConflict: 'user_id,date' })
         .select()
         .single();
       if (error) throw error;
+
+      // Sincroniza também no perfil do usuário e no AsyncStorage para atualizar mascote e silhueta
+      if (weightKg && !isNaN(weightKg) && weightKg > 0) {
+        try {
+          await AsyncStorage.setItem(`bio_weight_${user!.id}`, String(weightKg));
+          const profilePatch: any = { weight_kg: weightKg };
+          if (body.body_fat_pct !== undefined && body.body_fat_pct !== null) {
+            profilePatch.body_fat_pct = Number(body.body_fat_pct);
+            await AsyncStorage.setItem(`bio_fat_${user!.id}`, String(body.body_fat_pct));
+          }
+          if (body.muscle_mass_pct !== undefined && body.muscle_mass_pct !== null) {
+            profilePatch.muscle_mass_pct = Number(body.muscle_mass_pct);
+            await AsyncStorage.setItem(`bio_muscle_${user!.id}`, String(body.muscle_mass_pct));
+          }
+          if (body.body_water_pct !== undefined && body.body_water_pct !== null) {
+            profilePatch.body_water_pct = Number(body.body_water_pct);
+            await AsyncStorage.setItem(`bio_water_${user!.id}`, String(body.body_water_pct));
+          }
+          await supabase.from('profiles').update(profilePatch).eq('id', user!.id);
+        } catch (syncErr) {
+          console.warn('[WeightLog] Aviso ao sincronizar perfil:', syncErr);
+        }
+      }
       return data;
     }
 
@@ -999,7 +1092,7 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
     }
 
     // Registrar Check-in Oficial de Bioimpedância & Peso (+15 pts no grupo)
-    if (endpoint === '/api/checkin/log') {
+    if (endpoint === '/api/checkin/log' || endpoint === '/api/checkin/record') {
       const today = body?.date || new Date().toISOString().split('T')[0];
       const weightKg = Number(body?.weight_kg);
 
@@ -1030,6 +1123,7 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
           .select()
           .maybeSingle();
         if (!error) savedCheckin = data;
+        else console.warn('[Checkin] Erro ao salvar body_checkins:', error);
       } catch (e) {
         console.warn('[Checkin] Falha na tabela body_checkins (prosseguindo com perfil):', e);
       }
@@ -1043,19 +1137,40 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
       if (checkinRecord.muscle_mass_pct !== null) profileUpdates.muscle_mass_pct = checkinRecord.muscle_mass_pct;
       if (checkinRecord.body_water_pct !== null) profileUpdates.body_water_pct = checkinRecord.body_water_pct;
       if (checkinRecord.basal_metabolism_kcal !== null) profileUpdates.basal_metabolism_kcal = checkinRecord.basal_metabolism_kcal;
-      if (checkinRecord.waist_cm !== null) {
-        profileUpdates.waist_cm = checkinRecord.waist_cm;
-        try { await AsyncStorage.setItem(`bio_waist_${user!.id}`, String(checkinRecord.waist_cm)); } catch {}
-      }
-      if (checkinRecord.body_fat_pct !== null) {
-        try { await AsyncStorage.setItem(`bio_fat_${user!.id}`, String(checkinRecord.body_fat_pct)); } catch {}
-      }
-      if (checkinRecord.muscle_mass_pct !== null) {
-        try { await AsyncStorage.setItem(`bio_muscle_${user!.id}`, String(checkinRecord.muscle_mass_pct)); } catch {}
-      }
-      try { await AsyncStorage.setItem(`bio_weight_${user!.id}`, String(weightKg)); } catch {}
+      if (checkinRecord.metabolic_age !== null) profileUpdates.metabolic_age = checkinRecord.metabolic_age;
+      if (checkinRecord.waist_cm !== null) profileUpdates.waist_cm = checkinRecord.waist_cm;
       if (body.height_cm) profileUpdates.height_cm = Number(body.height_cm);
       if (body.age) profileUpdates.age = Number(body.age);
+
+      // Se o perfil ainda não tem linha de base (Marco Zero), registra agora
+      try {
+        const { data: currentProfile } = await supabase
+          .from('profiles')
+          .select('initial_weight_kg, initial_body_fat_pct, initial_muscle_mass_pct, initial_waist_cm, initial_checkin_date')
+          .eq('id', user!.id)
+          .maybeSingle();
+
+        if (!currentProfile?.initial_weight_kg) {
+          profileUpdates.initial_weight_kg = weightKg;
+          profileUpdates.initial_checkin_date = today;
+          if (checkinRecord.body_fat_pct !== null) profileUpdates.initial_body_fat_pct = checkinRecord.body_fat_pct;
+          if (checkinRecord.muscle_mass_pct !== null) profileUpdates.initial_muscle_mass_pct = checkinRecord.muscle_mass_pct;
+          if (checkinRecord.waist_cm !== null) profileUpdates.initial_waist_cm = checkinRecord.waist_cm;
+        }
+      } catch {}
+
+      // Sincroniza em cache local para suporte offline completo
+      try {
+        await Promise.all([
+          AsyncStorage.setItem(`bio_weight_${user!.id}`, String(weightKg)),
+          checkinRecord.waist_cm !== null ? AsyncStorage.setItem(`bio_waist_${user!.id}`, String(checkinRecord.waist_cm)) : Promise.resolve(),
+          checkinRecord.body_fat_pct !== null ? AsyncStorage.setItem(`bio_fat_${user!.id}`, String(checkinRecord.body_fat_pct)) : Promise.resolve(),
+          checkinRecord.muscle_mass_pct !== null ? AsyncStorage.setItem(`bio_muscle_${user!.id}`, String(checkinRecord.muscle_mass_pct)) : Promise.resolve(),
+          checkinRecord.body_water_pct !== null ? AsyncStorage.setItem(`bio_water_${user!.id}`, String(checkinRecord.body_water_pct)) : Promise.resolve(),
+          checkinRecord.basal_metabolism_kcal !== null ? AsyncStorage.setItem(`bio_basal_${user!.id}`, String(checkinRecord.basal_metabolism_kcal)) : Promise.resolve(),
+          checkinRecord.metabolic_age !== null ? AsyncStorage.setItem(`bio_meta_age_${user!.id}`, String(checkinRecord.metabolic_age)) : Promise.resolve(),
+        ]);
+      } catch {}
 
       try {
         await supabase
@@ -1072,7 +1187,14 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
       // 3. Registrar no histórico de peso (weight_logs) para alimentar os gráficos
       await supabase
         .from('weight_logs')
-        .upsert({ user_id: user!.id, date: today, weight_kg: weightKg }, { onConflict: 'user_id,date' });
+        .upsert({
+          user_id: user!.id,
+          date: today,
+          weight_kg: weightKg,
+          body_fat_pct: checkinRecord.body_fat_pct,
+          muscle_mass_pct: checkinRecord.muscle_mass_pct,
+          body_water_pct: checkinRecord.body_water_pct,
+        }, { onConflict: 'user_id,date' });
 
       return { success: true, checkin: savedCheckin || checkinRecord };
     }
@@ -1099,6 +1221,33 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
       if (body.muscle_mass_pct !== undefined && body.muscle_mass_pct !== null) {
         try { await AsyncStorage.setItem(`bio_muscle_${user!.id}`, String(body.muscle_mass_pct)); } catch {}
       }
+      if (body.body_water_pct !== undefined && body.body_water_pct !== null) {
+        try { await AsyncStorage.setItem(`bio_water_${user!.id}`, String(body.body_water_pct)); } catch {}
+      }
+      if (body.basal_metabolism_kcal !== undefined && body.basal_metabolism_kcal !== null) {
+        try { await AsyncStorage.setItem(`bio_basal_${user!.id}`, String(body.basal_metabolism_kcal)); } catch {}
+      }
+      if (body.metabolic_age !== undefined && body.metabolic_age !== null) {
+        try { await AsyncStorage.setItem(`bio_meta_age_${user!.id}`, String(body.metabolic_age)); } catch {}
+      }
+      if (body.initial_weight_kg !== undefined && body.initial_weight_kg !== null) {
+        try { await AsyncStorage.setItem(`bio_init_weight_${user!.id}`, String(body.initial_weight_kg)); } catch {}
+      }
+      if (body.initial_body_fat_pct !== undefined && body.initial_body_fat_pct !== null) {
+        try { await AsyncStorage.setItem(`bio_init_fat_${user!.id}`, String(body.initial_body_fat_pct)); } catch {}
+      }
+      if (body.initial_muscle_mass_pct !== undefined && body.initial_muscle_mass_pct !== null) {
+        try { await AsyncStorage.setItem(`bio_init_muscle_${user!.id}`, String(body.initial_muscle_mass_pct)); } catch {}
+      }
+      if (body.initial_waist_cm !== undefined && body.initial_waist_cm !== null) {
+        try { await AsyncStorage.setItem(`bio_init_waist_${user!.id}`, String(body.initial_waist_cm)); } catch {}
+      }
+      if (body.initial_checkin_date) {
+        try { await AsyncStorage.setItem(`bio_init_date_${user!.id}`, body.initial_checkin_date); } catch {}
+      }
+      if (body.avatar_customization) {
+        try { await AsyncStorage.setItem(`avatar_custom_${user!.id}`, JSON.stringify(body.avatar_customization)); } catch {}
+      }
       if (body.birth_date) {
         try { await AsyncStorage.setItem(`birth_date_${user!.id}`, body.birth_date); } catch {}
       }
@@ -1114,6 +1263,9 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
             waist_cm: body.waist_cm || undefined,
             body_fat_pct: body.body_fat_pct || undefined,
             muscle_mass_pct: body.muscle_mass_pct || undefined,
+            body_water_pct: body.body_water_pct || undefined,
+            basal_metabolism_kcal: body.basal_metabolism_kcal || undefined,
+            metabolic_age: body.metabolic_age || undefined,
           }
         });
       } catch {}
@@ -1127,15 +1279,21 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
         .single();
 
       // Tolerância se as novas colunas ainda não foram migradas no Supabase remoto
-      if (error && (error.message?.includes('avatar_mascot_id') || error.message?.includes('waist_cm') || error.message?.includes('initial_') || error.message?.includes('birth_date') || error.message?.includes('body_fat_pct') || error.message?.includes('muscle_mass_pct') || error.message?.includes('sex'))) {
+      if (error && (error.message?.includes('avatar_mascot_id') || error.message?.includes('waist_cm') || error.message?.includes('initial_') || error.message?.includes('birth_date') || error.message?.includes('body_fat_pct') || error.message?.includes('muscle_mass_pct') || error.message?.includes('body_water_pct') || error.message?.includes('basal_metabolism_kcal') || error.message?.includes('metabolic_age') || error.message?.includes('avatar_customization') || error.message?.includes('sex'))) {
         delete payload.avatar_mascot_id;
         delete payload.waist_cm;
         delete payload.initial_weight_kg;
         delete payload.initial_body_fat_pct;
         delete payload.initial_waist_cm;
+        delete payload.initial_muscle_mass_pct;
+        delete payload.initial_checkin_date;
         delete payload.birth_date;
         delete payload.body_fat_pct;
         delete payload.muscle_mass_pct;
+        delete payload.body_water_pct;
+        delete payload.basal_metabolism_kcal;
+        delete payload.metabolic_age;
+        delete payload.avatar_customization;
         delete payload.sex;
         const retry = await supabase
           .from('profiles')
