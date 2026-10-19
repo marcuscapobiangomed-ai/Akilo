@@ -1278,33 +1278,69 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
         .select()
         .single();
 
-      // Tolerância se as novas colunas ainda não foram migradas no Supabase remoto
-      if (error && (error.message?.includes('avatar_mascot_id') || error.message?.includes('waist_cm') || error.message?.includes('initial_') || error.message?.includes('birth_date') || error.message?.includes('body_fat_pct') || error.message?.includes('muscle_mass_pct') || error.message?.includes('body_water_pct') || error.message?.includes('basal_metabolism_kcal') || error.message?.includes('metabolic_age') || error.message?.includes('avatar_customization') || error.message?.includes('sex'))) {
-        delete payload.avatar_mascot_id;
-        delete payload.waist_cm;
-        delete payload.initial_weight_kg;
-        delete payload.initial_body_fat_pct;
-        delete payload.initial_waist_cm;
-        delete payload.initial_muscle_mass_pct;
-        delete payload.initial_checkin_date;
-        delete payload.birth_date;
-        delete payload.body_fat_pct;
-        delete payload.muscle_mass_pct;
-        delete payload.body_water_pct;
-        delete payload.basal_metabolism_kcal;
-        delete payload.metabolic_age;
-        delete payload.avatar_customization;
-        delete payload.sex;
-        const retry = await supabase
-          .from('profiles')
-          .update(payload)
-          .eq('id', user!.id)
-          .select()
-          .single();
-        if (retry.error) throw retry.error;
-        data = { ...retry.data, ...body };
-      } else if (error) {
-        throw error;
+      // Tolerância cirúrgica: se uma coluna não existir no schema remoto, remove apenas a coluna causadora
+      if (error && error.message) {
+        const msg = error.message.toLowerCase();
+        let changed = false;
+
+        const candidateColumns = [
+          'birth_date',
+          'avatar_customization',
+          'initial_muscle_mass_pct',
+          'initial_checkin_date',
+          'initial_waist_cm',
+          'initial_body_fat_pct',
+          'initial_weight_kg',
+          'avatar_mascot_id',
+          'waist_cm',
+          'body_water_pct',
+          'basal_metabolism_kcal',
+          'metabolic_age',
+          'muscle_mass_pct',
+          'body_fat_pct',
+          'sex',
+        ];
+
+        // 1. Tenta remoção cirúrgica da coluna específica identificada no erro
+        for (const col of candidateColumns) {
+          if (msg.includes(col) && col in payload) {
+            delete (payload as any)[col];
+            changed = true;
+          }
+        }
+
+        // 2. Se identificou a coluna, tenta novamente mantendo todas as outras colunas
+        if (changed) {
+          const retrySingle = await supabase
+            .from('profiles')
+            .update(payload)
+            .eq('id', user!.id)
+            .select()
+            .single();
+
+          if (!retrySingle.error) {
+            data = { ...retrySingle.data, ...body };
+            error = null as any;
+          } else {
+            error = retrySingle.error;
+          }
+        }
+
+        // 3. Fallback de segurança amplo apenas se o erro persistir
+        if (error) {
+          for (const col of candidateColumns) {
+            delete (payload as any)[col];
+          }
+          const retryAll = await supabase
+            .from('profiles')
+            .update(payload)
+            .eq('id', user!.id)
+            .select()
+            .single();
+
+          if (retryAll.error) throw retryAll.error;
+          data = { ...retryAll.data, ...body };
+        }
       }
       return data;
     }

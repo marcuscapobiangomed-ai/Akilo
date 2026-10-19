@@ -2,9 +2,11 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingVi
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useState } from 'react';
 import { useRouter, Link } from 'expo-router';
+import * as Linking from 'expo-linking';
 import { supabase } from '../../core/supabase';
-import { Mail, Lock, User, Eye, EyeOff, CheckCircle, ArrowLeft, Send } from 'lucide-react-native';
+import { Mail, Lock, User, Eye, EyeOff, CheckCircle, ArrowLeft, Send, KeyRound } from 'lucide-react-native';
 import { useToast } from '../../components/Toast';
+import { hasCompletedOnboarding } from '../../core/onboarding';
 
 export default function Signup() {
   const router = useRouter();
@@ -16,6 +18,8 @@ export default function Signup() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [resending, setResending] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [verifyingOtp, setVerifyingOtp] = useState(false);
 
   const formatSignupError = (errMessage: string): string => {
     if (!errMessage) return 'Falha ao realizar cadastro. Tente novamente.';
@@ -29,7 +33,23 @@ export default function Signup() {
     if (msg.includes('invalid email') || msg.includes('unable to validate email')) {
       return 'Informe um formato de e-mail válido.';
     }
+    if (msg.includes('rate limit') || msg.includes('over_email_send_rate_limit') || msg.includes('too many requests')) {
+      return 'Limite de envio de e-mails atingido temporariamente no servidor (máximo de cadastros/hora). Aguarde alguns instantes.';
+    }
     return errMessage;
+  };
+
+  const navigateAfterAuth = async (userId: string) => {
+    try {
+      const completed = await hasCompletedOnboarding(userId);
+      if (!completed) {
+        router.replace('/(auth)/onboarding');
+      } else {
+        router.replace('/(tabs)');
+      }
+    } catch {
+      router.replace('/(auth)/onboarding');
+    }
   };
 
   const handleSignup = async () => {
@@ -48,26 +68,28 @@ export default function Signup() {
     
     setLoading(true);
     try {
+      const emailRedirectTo = Linking.createURL('/');
       const { error, data } = await supabase.auth.signUp({
         email: trimmedEmail,
         password,
         options: { 
           data: { name: trimmedName },
+          emailRedirectTo,
         }
       });
       
       if (error) throw error;
       
-      // Se não precisa de confirmação por e-mail ou se já confirmou direto:
+      // Se não precisa de confirmação por e-mail ou se sessão foi gerada imediatamente:
       if (data?.session) {
         showToast('Conta criada com sucesso!', 'success');
-        router.replace('/(tabs)');
+        await navigateAfterAuth(data.session.user.id);
         return;
       }
 
       // Se e-mail já existe sem criar sessão
       if (data?.user?.identities?.length === 0) {
-        showToast('Uma conta com este e-mail já existe.', 'error');
+        showToast('Uma conta com este e-mail já existe. Tente fazer login.', 'error');
       } else {
         setShowConfirmation(true);
       }
@@ -78,6 +100,41 @@ export default function Signup() {
     }
   };
 
+  const handleVerifyOtp = async () => {
+    const cleanToken = otpCode.trim();
+    if (!cleanToken) {
+      showToast('Digite o código de confirmação numérico.', 'error');
+      return;
+    }
+
+    setVerifyingOtp(true);
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({
+        email: email.trim().toLowerCase(),
+        token: cleanToken,
+        type: 'signup',
+      });
+
+      if (error) throw error;
+
+      showToast('E-mail validado com sucesso!', 'success');
+      if (data?.session?.user?.id) {
+        await navigateAfterAuth(data.session.user.id);
+      } else {
+        router.replace('/(auth)/login');
+      }
+    } catch (e: any) {
+      const msg = e.message?.toLowerCase() || '';
+      if (msg.includes('token has expired') || msg.includes('invalid')) {
+        showToast('Código de confirmação incorreto ou expirado.', 'error');
+      } else {
+        showToast(e.message || 'Falha ao validar código. Tente novamente.', 'error');
+      }
+    } finally {
+      setVerifyingOtp(false);
+    }
+  };
+
   const handleBackToLogin = () => {
     router.replace('/(auth)/login');
   };
@@ -85,63 +142,108 @@ export default function Signup() {
   const handleResendEmail = async () => {
     setResending(true);
     try {
-      const { error } = await supabase.auth.resend({ type: 'signup', email: email.trim().toLowerCase() });
+      const emailRedirectTo = Linking.createURL('/');
+      const { error } = await supabase.auth.resend({ 
+        type: 'signup', 
+        email: email.trim().toLowerCase(),
+        options: { emailRedirectTo }
+      });
       if (error) throw error;
       showToast('E-mail de confirmação reenviado com sucesso!', 'success');
-    } catch (e) {
-      showToast('Não foi possível reenviar o e-mail no momento.', 'error');
+    } catch (e: any) {
+      const msg = e.message?.toLowerCase() || '';
+      if (msg.includes('rate limit') || msg.includes('too many')) {
+        showToast('Aguarde alguns minutos antes de solicitar novo reenvio.', 'error');
+      } else {
+        showToast('Não foi possível reenviar o e-mail no momento.', 'error');
+      }
     } finally {
       setResending(false);
     }
   };
 
-  // Tela de confirmação de e-mail
+  // Tela de confirmação e validação de conta
   if (showConfirmation) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.confirmationContent}>
-          <View style={styles.confirmationIcon}>
-            <CheckCircle color="#22c55e" size={56} />
-          </View>
-          
-          <Text style={styles.confirmationTitle}>Verifique seu E-mail</Text>
-          
-          <Text style={styles.confirmationText}>
-            Enviamos um link de confirmação seguro para:
-          </Text>
-          <Text style={styles.confirmationEmail}>{email.trim()}</Text>
-          
-          <View style={styles.instructionBox}>
-            <Text style={styles.instructionTitle}>Próximos Passos:</Text>
-            <Text style={styles.instructionText}>1. Abra o e-mail que acabamos de enviar</Text>
-            <Text style={styles.instructionText}>2. Clique no link de confirmação</Text>
-            <Text style={styles.instructionText}>3. Retorne ao aplicativo para iniciar seus registros</Text>
-          </View>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.content}>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+            <View style={styles.confirmationContent}>
+              <View style={styles.confirmationIcon}>
+                <CheckCircle color="#22c55e" size={56} />
+              </View>
+              
+              <Text style={styles.confirmationTitle}>Verifique seu E-mail</Text>
+              
+              <Text style={styles.confirmationText}>
+                Enviamos as instruções e o código numérico para:
+              </Text>
+              <Text style={styles.confirmationEmail}>{email.trim()}</Text>
+              
+              {/* Seção de Validação Imediata via OTP */}
+              <View style={styles.otpBox}>
+                <View style={styles.otpHeader}>
+                  <KeyRound color="#22c55e" size={18} />
+                  <Text style={styles.otpBoxTitle}>Validação Direta no App</Text>
+                </View>
+                <Text style={styles.otpBoxHint}>
+                  Copie o código numérico (OTP) recebido no e-mail e cole abaixo para ativar sua conta na hora:
+                </Text>
+                <View style={styles.otpInputWrapper}>
+                  <TextInput
+                    style={styles.otpInput}
+                    value={otpCode}
+                    onChangeText={setOtpCode}
+                    placeholder="Código (ex: 56236975)"
+                    placeholderTextColor="#6b7280"
+                    keyboardType="number-pad"
+                    maxLength={12}
+                    autoCapitalize="none"
+                  />
+                </View>
+                <TouchableOpacity 
+                  style={[styles.verifyButton, (!otpCode.trim() || verifyingOtp) && styles.buttonDisabled]} 
+                  onPress={handleVerifyOtp}
+                  disabled={!otpCode.trim() || verifyingOtp}
+                  activeOpacity={0.8}
+                >
+                  {verifyingOtp ? (
+                    <ActivityIndicator color="#0a1a15" size="small" />
+                  ) : (
+                    <Text style={styles.verifyButtonText}>Ativar Conta e Entrar</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
 
-          <Text style={styles.spamNote}>
-            Não encontrou o e-mail? Verifique também sua caixa de spam ou lixo eletrônico.
-          </Text>
+              {/* Instruções do Link Alternativo */}
+              <View style={styles.instructionBox}>
+                <Text style={styles.instructionTitle}>Ou clique no link do e-mail:</Text>
+                <Text style={styles.instructionText}>• O e-mail contém um link de ativação segura.</Text>
+                <Text style={styles.instructionText}>• Se não encontrar na caixa principal, confira o lixo eletrônico / spam.</Text>
+              </View>
 
-          <TouchableOpacity 
-            style={[styles.resendButton, resending && { opacity: 0.6 }]} 
-            onPress={handleResendEmail}
-            disabled={resending}
-          >
-            {resending ? (
-              <ActivityIndicator color="#22c55e" size="small" />
-            ) : (
-              <>
-                <Send color="#22c55e" size={18} />
-                <Text style={styles.resendText}>Reenviar E-mail de Confirmação</Text>
-              </>
-            )}
-          </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.resendButton, resending && { opacity: 0.6 }]} 
+                onPress={handleResendEmail}
+                disabled={resending}
+              >
+                {resending ? (
+                  <ActivityIndicator color="#22c55e" size="small" />
+                ) : (
+                  <>
+                    <Send color="#22c55e" size={16} />
+                    <Text style={styles.resendText}>Reenviar E-mail</Text>
+                  </>
+                )}
+              </TouchableOpacity>
 
-          <TouchableOpacity style={styles.secondaryButton} onPress={handleBackToLogin}>
-            <ArrowLeft color="#9ca3af" size={18} />
-            <Text style={styles.secondaryButtonText}>Voltar para o Login</Text>
-          </TouchableOpacity>
-        </View>
+              <TouchableOpacity style={styles.secondaryButton} onPress={handleBackToLogin}>
+                <ArrowLeft color="#9ca3af" size={18} />
+                <Text style={styles.secondaryButtonText}>Voltar para o Login</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     );
   }
@@ -332,6 +434,72 @@ const styles = StyleSheet.create({
   confirmationTitle: { color: '#ffffff', fontSize: 24, fontWeight: 'bold', marginBottom: 12, textAlign: 'center' },
   confirmationText: { color: '#9ca3af', fontSize: 15, textAlign: 'center' },
   confirmationEmail: { color: '#22c55e', fontSize: 16, fontWeight: 'bold', marginTop: 4, marginBottom: 24, textAlign: 'center' },
+  // OTP Box
+  otpBox: {
+    backgroundColor: '#0f2920',
+    borderRadius: 16,
+    padding: 20,
+    width: '100%',
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.35)',
+    shadowColor: '#22c55e',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  otpHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  otpBoxTitle: {
+    color: '#22c55e',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  otpBoxHint: {
+    color: '#9ca3af',
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 14,
+  },
+  otpInputWrapper: {
+    backgroundColor: '#0a1a15',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#1f3d32',
+    paddingHorizontal: 14,
+    marginBottom: 14,
+  },
+  otpInput: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: 'bold',
+    letterSpacing: 4,
+    textAlign: 'center',
+    paddingVertical: 12,
+  },
+  verifyButton: {
+    backgroundColor: '#22c55e',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#22c55e',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  verifyButtonText: {
+    color: '#0a1a15',
+    fontWeight: 'bold',
+    fontSize: 15,
+  },
+
   instructionBox: {
     backgroundColor: '#0f2920',
     borderRadius: 16,
