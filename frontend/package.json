@@ -7,7 +7,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "deploy:prod": "expo export --platform web && npx vercel deploy dist --prod --yes",
+    "deploy:prod": "expo export --platform web && cp vercel.json dist/ && npx vercel deploy dist --prod --yes",
     "build:apk": "eas build -p android --profile preview",
     "build:apk:local": "eas build -p android --profile preview --local"
   },

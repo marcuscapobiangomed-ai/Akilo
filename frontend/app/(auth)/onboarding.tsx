@@ -124,6 +124,12 @@ export default function Onboarding() {
 
   // Formatação de Máscara DD/MM/AAAA para Data de Nascimento
   const formatBirthDate = (raw: string) => {
+    if (!raw) return '';
+    // Se vier do banco como YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      const [y, m, d] = raw.split('-');
+      return `${d}/${m}/${y}`;
+    }
     const numbers = raw.replace(/\D/g, '').slice(0, 8);
     if (numbers.length <= 2) return numbers;
     if (numbers.length <= 4) return `${numbers.slice(0, 2)}/${numbers.slice(2)}`;
@@ -131,11 +137,20 @@ export default function Onboarding() {
   };
 
   const calculateAgeFromBirthDate = (dateStr: string): number | null => {
-    const parts = dateStr.split('/');
-    if (parts.length !== 3) return null;
-    const day = parseInt(parts[0], 10);
-    const month = parseInt(parts[1], 10);
-    const year = parseInt(parts[2], 10);
+    if (!dateStr) return null;
+    let day = 0, month = 0, year = 0;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      const parts = dateStr.split('-');
+      year = parseInt(parts[0], 10);
+      month = parseInt(parts[1], 10);
+      day = parseInt(parts[2], 10);
+    } else {
+      const parts = dateStr.split('/');
+      if (parts.length !== 3) return null;
+      day = parseInt(parts[0], 10);
+      month = parseInt(parts[1], 10);
+      year = parseInt(parts[2], 10);
+    }
     if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
     if (day < 1 || day > 31 || month < 1 || month > 12 || year < 1920 || year > new Date().getFullYear()) return null;
 

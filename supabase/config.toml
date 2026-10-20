@@ -1,8 +1,13 @@
 project_id = "zakjubaoocmplpmywxkm"
 
 [auth]
-additional_redirect_urls = ["batalhadabalanca://**", "http://localhost:8081/**"]
-site_url = "http://localhost:8081"
+additional_redirect_urls = [
+  "https://dist-seven-chi-77.vercel.app/**",
+  "https://frontend-chi-ten-95.vercel.app/**",
+  "batalhadabalanca://**",
+  "http://localhost:8081/**"
+]
+site_url = "https://dist-seven-chi-77.vercel.app"
 
 [auth.email]
 enable_confirmations = false

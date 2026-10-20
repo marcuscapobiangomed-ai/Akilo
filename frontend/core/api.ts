@@ -1248,6 +1248,19 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
       if (body.avatar_customization) {
         try { await AsyncStorage.setItem(`avatar_custom_${user!.id}`, JSON.stringify(body.avatar_customization)); } catch {}
       }
+
+      // Normalização robusta de data de nascimento para ISO 8601 (YYYY-MM-DD)
+      let normalizedBirthDate: string | null = null;
+      if (body.birth_date) {
+        const s = String(body.birth_date).trim();
+        if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) {
+          const [d, m, y] = s.split('/');
+          normalizedBirthDate = `${y}-${m}-${d}`;
+        } else if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+          normalizedBirthDate = s;
+        }
+      }
+
       if (body.birth_date) {
         try { await AsyncStorage.setItem(`birth_date_${user!.id}`, body.birth_date); } catch {}
       }
@@ -1258,7 +1271,7 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
           data: {
             name: body.name || undefined,
             sex: body.sex || undefined,
-            birth_date: body.birth_date || undefined,
+            birth_date: normalizedBirthDate || body.birth_date || undefined,
             avatar_mascot_id: body.avatar_mascot_id || undefined,
             waist_cm: body.waist_cm || undefined,
             body_fat_pct: body.body_fat_pct || undefined,
@@ -1270,15 +1283,21 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
         });
       } catch {}
 
-      let payload = { ...body };
+      let payload = { ...body, id: user!.id };
+      if (normalizedBirthDate !== null) {
+        payload.birth_date = normalizedBirthDate;
+      } else if (body.birth_date === '' || body.birth_date === null) {
+        payload.birth_date = null;
+      }
+
+      // Upsert atômico (insere se não existir via profiles_insert_own, ou atualiza via profiles_update_own)
       let { data, error } = await supabase
         .from('profiles')
-        .update(payload)
-        .eq('id', user!.id)
+        .upsert(payload, { onConflict: 'id' })
         .select()
         .single();
 
-      // Tolerância cirúrgica: se uma coluna não existir no schema remoto, remove apenas a coluna causadora
+      // Tolerância cirúrgica: se uma coluna não existir no schema remoto ou falhar, remove cirurgicamente
       if (error && error.message) {
         const msg = error.message.toLowerCase();
         let changed = false;
@@ -1301,6 +1320,12 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
           'sex',
         ];
 
+        // Se o erro for de formato de data, remove especificamente birth_date
+        if (msg.includes('date/time') || msg.includes('syntax for type date') || msg.includes('birth_date')) {
+          delete (payload as any)['birth_date'];
+          changed = true;
+        }
+
         // 1. Tenta remoção cirúrgica da coluna específica identificada no erro
         for (const col of candidateColumns) {
           if (msg.includes(col) && col in payload) {
@@ -1313,8 +1338,7 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
         if (changed) {
           const retrySingle = await supabase
             .from('profiles')
-            .update(payload)
-            .eq('id', user!.id)
+            .upsert(payload, { onConflict: 'id' })
             .select()
             .single();
 
@@ -1333,8 +1357,7 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
           }
           const retryAll = await supabase
             .from('profiles')
-            .update(payload)
-            .eq('id', user!.id)
+            .upsert(payload, { onConflict: 'id' })
             .select()
             .single();
 

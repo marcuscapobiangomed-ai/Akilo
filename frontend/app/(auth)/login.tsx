@@ -309,6 +309,12 @@ const styles = StyleSheet.create({
     maxWidth: 440,
     alignSelf: 'center',
   },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingVertical: 16,
+    width: '100%',
+  },
   
   // Header
   header: { alignItems: 'center', marginBottom: 32 },
