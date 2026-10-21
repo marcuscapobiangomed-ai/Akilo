@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../../core/api';
 import { supabase } from '../../core/supabase';
 import { useRouter } from 'expo-router';
+import { getLocalDateString } from '../../core/dateUtils';
 import { 
   User, 
   Target, 
@@ -226,10 +227,10 @@ export default function Profile() {
     try {
       await api.put('/api/profile/targets', {
         calories_target: parseInt(editTargets.calories, 10) || 2000,
-        protein_g_target: parseInt(editTargets.protein, 10) || 140,
-        carbs_g_target: parseInt(editTargets.carbs, 10) || 250,
-        fats_g_target: parseInt(editTargets.fats, 10) || 60,
-        fiber_g_target: parseInt(editTargets.fiber, 10) || 28,
+        protein_target_g: parseInt(editTargets.protein, 10) || 140,
+        carbs_target_g: parseInt(editTargets.carbs, 10) || 250,
+        fats_target_g: parseInt(editTargets.fats, 10) || 60,
+        fiber_target_g: parseInt(editTargets.fiber, 10) || 28,
         water_target_ml: parseInt(editTargets.water, 10) || 2500,
         weekly_workouts_target: parseInt(editTargets.weeklyWorkouts, 10) || 4,
       });
@@ -321,7 +322,7 @@ export default function Profile() {
 
       // Sincroniza também no log de checkin/peso de hoje se o peso tiver sido informado
       if (parsedWeight && parsedWeight > 0) {
-        const today = new Date().toISOString().split('T')[0];
+        const today = getLocalDateString();
         try {
           await api.post('/api/checkin/log', {
             date: today,

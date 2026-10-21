@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import { api } from '../../core/api';
 import { supabase } from '../../core/supabase';
+import { getLocalDateString } from '../../core/dateUtils';
 import { 
   ChevronLeft, 
   Dumbbell, 
@@ -233,6 +234,7 @@ export default function Onboarding() {
   };
 
   const handleComplete = async () => {
+    if (loading) return;
     setLoading(true);
     try {
       const parsedAgeVal = parseInt(age, 10) || 28;
@@ -242,9 +244,12 @@ export default function Onboarding() {
       const parsedMuscleVal = muscleMass ? parseFloat(muscleMass.replace(',', '.')) : null;
       const parsedWaistVal = waist ? parseFloat(waist.replace(',', '.')) : null;
 
-      const today = new Date().toISOString().split('T')[0];
+      const today = getLocalDateString();
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
 
       // 1. Salvar dados biométricos completos no perfil com linha de base inicial (Marco Zero)
+      // e marcar onboarding_completed: true diretamente no mesmo payload atômico
       await api.put('/api/profile/', {
         name: fullName.trim() || undefined,
         age: parsedAgeVal,
@@ -264,6 +269,7 @@ export default function Onboarding() {
         initial_muscle_mass_pct: parsedMuscleVal,
         initial_waist_cm: parsedWaistVal,
         initial_checkin_date: today,
+        onboarding_completed: true,
       });
       
       // 2. Salvar metas diárias calculadas com teto SBC de saturadas
@@ -285,7 +291,9 @@ export default function Onboarding() {
           body_fat_pct: parsedFatVal,
           muscle_mass_pct: parsedMuscleVal,
         });
-      } catch {}
+      } catch (err) {
+        console.warn('Aviso ao registrar peso inicial:', err);
+      }
 
       try {
         await api.post('/api/checkin/log', {
@@ -294,13 +302,15 @@ export default function Onboarding() {
           body_fat_pct: parsedFatVal,
           muscle_mass_pct: parsedMuscleVal,
           waist_cm: parsedWaistVal,
+          notes: 'Marco Zero inicial de bioimpedância',
         });
-      } catch {}
+      } catch (err) {
+        console.warn('Aviso ao registrar checkin inicial:', err);
+      }
 
-      // 4. Marcar onboarding como concluído no banco e em cache
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user?.id) {
-        await markOnboardingComplete(session.user.id);
+      // 4. Marcar onboarding como concluído no cache local e confirmar no banco
+      if (userId) {
+        await markOnboardingComplete(userId);
       }
       
       showToast('Perfil configurado com sucesso! Bem-vindo à arena.', 'success');
@@ -919,7 +929,7 @@ export default function Onboarding() {
           <TouchableOpacity 
             style={styles.primaryButton}
             onPress={() => {
-              soundHaptics.triggerMediumTap();
+              soundHaptics.triggerCelebration();
               calculateTargets();
             }}
             activeOpacity={0.8}
@@ -946,7 +956,7 @@ export default function Onboarding() {
               </View>
             ) : (
               <>
-                <Text style={styles.primaryButtonText}>Iniciar Minha Batalha</Text>
+                <Text style={styles.primaryButtonText}>Confirmar Metas & Iniciar Minha Batalha</Text>
                 <ArrowRight color="#0a1a15" size={20} />
               </>
             )}

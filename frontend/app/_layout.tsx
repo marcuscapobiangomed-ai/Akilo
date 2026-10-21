@@ -30,7 +30,7 @@ export default function RootLayout() {
       setSession(session);
       
       // When a user logs in, check if they need onboarding
-      if (session && (_event === 'SIGNED_IN' || _event === 'USER_UPDATED')) {
+      if (session && _event === 'SIGNED_IN') {
         setCheckingOnboarding(true);
         try {
           const completed = await hasCompletedOnboarding(session.user.id);
@@ -78,13 +78,11 @@ export default function RootLayout() {
     }
   }, [session, initialized, segments, checkingOnboarding]);
 
-  if (!initialized || checkingOnboarding) {
+  if (!initialized) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#22c55e" />
-        <Text style={styles.loadingText}>
-          {checkingOnboarding ? 'Preparing your experience...' : 'Loading...'}
-        </Text>
+        <Text style={styles.loadingText}>Carregando...</Text>
       </View>
     );
   }

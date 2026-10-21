@@ -10,6 +10,7 @@ import NetInfo from '@react-native-community/netinfo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { dataEvents } from './dataEvents';
 import { evaluateCheckinDue } from './domain/checkinEngine';
+import { getLocalDateString } from './dateUtils';
 
 const DEFAULT_TARGETS = {
   calories_target: 2000,
@@ -48,6 +49,8 @@ const INVALIDATION_MAP: Record<string, string[]> = {
   '/api/profile/': ['/api/profile/', '/api/analytics/daily', '/api/checkin/status', '/api/checkin/comparison'],
   '/api/profile/targets': ['/api/profile/targets', '/api/analytics/daily', '/api/analytics/weekly'],
   '/api/checkin/': ['/api/checkin/status', '/api/checkin/comparison', '/api/checkin/history', '/api/profile/', '/api/weight/', '/api/analytics/daily', '/api/analytics/weekly', '/api/groups/leaderboard'],
+  '/api/checkin/log': ['/api/checkin/status', '/api/checkin/comparison', '/api/checkin/history', '/api/profile/', '/api/weight/', '/api/analytics/daily', '/api/analytics/weekly', '/api/groups/leaderboard'],
+  '/api/checkin/record': ['/api/checkin/status', '/api/checkin/comparison', '/api/checkin/history', '/api/profile/', '/api/weight/', '/api/analytics/daily', '/api/analytics/weekly', '/api/groups/leaderboard'],
 };
 
 const EVENT_MAP: Record<string, string[]> = {
@@ -343,7 +346,7 @@ async function fetchOpenFoodFacts(queryOrBarcode: string): Promise<any[]> {
   // 4. Diário Alimentar do Dia
   if (endpoint === '/api/food/log') {
     if (!user) return [];
-    const date = params?.date || new Date().toISOString().split('T')[0];
+    const date = params?.date || getLocalDateString();
     const { data } = await supabase
       .from('food_logs')
       .select('*')
@@ -421,7 +424,7 @@ async function fetchOpenFoodFacts(queryOrBarcode: string): Promise<any[]> {
   // 7. Água
   if (endpoint === '/api/water/') {
     if (!user) return [];
-    const date = params?.date || new Date().toISOString().split('T')[0];
+    const date = params?.date || getLocalDateString();
     const { data } = await supabase
       .from('water_logs')
       .select('*')
@@ -454,7 +457,7 @@ async function fetchOpenFoodFacts(queryOrBarcode: string): Promise<any[]> {
   // 10. Diário de Exercícios
   if (endpoint === '/api/exercises/log') {
     if (!user) return [];
-    const date = params?.date || new Date().toISOString().split('T')[0];
+    const date = params?.date || getLocalDateString();
     const { data } = await supabase
       .from('exercise_logs')
       .select('*')
@@ -467,7 +470,7 @@ async function fetchOpenFoodFacts(queryOrBarcode: string): Promise<any[]> {
   // 11. Resumo Diário (Analytics Daily)
   if (endpoint === '/api/analytics/daily') {
     if (!user) return { summary: { calories: 0, protein: 0, carbs: 0, fats: 0, fiber: 0, water: 0 }, targets: DEFAULT_TARGETS };
-    const date = params?.date || new Date().toISOString().split('T')[0];
+    const date = params?.date || getLocalDateString();
 
     const [foodRes, waterRes, exerciseRes, targetsRes] = await Promise.all([
       supabase.from('food_logs').select('*').eq('user_id', user.id).eq('date', date),
@@ -904,9 +907,18 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
   if (method === 'POST') {
     // Log de Alimento
     if (endpoint === '/api/food/log') {
+      const foodPayload: any = {
+        user_id: user!.id,
+        food_source: body.food_source || (body.food_custom_id ? 'custom' : 'master'),
+        date: body.date || getLocalDateString(),
+        ...body,
+      };
+      foodPayload.food_source = foodPayload.food_source || 'master';
+      foodPayload.date = foodPayload.date || getLocalDateString();
+
       const { data, error } = await supabase
         .from('food_logs')
-        .insert({ user_id: user!.id, ...body })
+        .insert(foodPayload)
         .select()
         .single();
       if (error) throw error;
@@ -1080,7 +1092,7 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
 
     // Pular / Adiar Check-in de Bioimpedância
     if (endpoint === '/api/checkin/skip') {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getLocalDateString();
       const { data, error } = await supabase
         .from('profiles')
         .update({ last_skipped_checkin_date: today })
@@ -1093,7 +1105,7 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
 
     // Registrar Check-in Oficial de Bioimpedância & Peso (+15 pts no grupo)
     if (endpoint === '/api/checkin/log' || endpoint === '/api/checkin/record') {
-      const today = body?.date || new Date().toISOString().split('T')[0];
+      const today = body?.date || getLocalDateString();
       const weightKg = Number(body?.weight_kg);
 
       if (!weightKg || isNaN(weightKg) || weightKg <= 0) {
@@ -1173,15 +1185,19 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
       } catch {}
 
       try {
-        await supabase
+        const { error: profErr } = await supabase
           .from('profiles')
           .update(profileUpdates)
           .eq('id', user!.id);
-      } catch (err: any) {
-        if (profileUpdates.waist_cm) {
-          delete profileUpdates.waist_cm;
-          await supabase.from('profiles').update(profileUpdates).eq('id', user!.id);
+        if (profErr) {
+          console.warn('[Checkin] Erro ao atualizar perfil:', profErr);
+          if (profileUpdates.waist_cm) {
+            delete profileUpdates.waist_cm;
+            await supabase.from('profiles').update(profileUpdates).eq('id', user!.id);
+          }
         }
+      } catch (err: any) {
+        console.warn('[Checkin] Exceção ao atualizar perfil:', err);
       }
 
       // 3. Registrar no histórico de peso (weight_logs) para alimentar os gráficos
@@ -1290,6 +1306,24 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
         payload.birth_date = null;
       }
 
+      // Normaliza goal_type para os valores estritos aceitos no banco
+      if (payload.goal_type) {
+        const gt = String(payload.goal_type).toLowerCase().trim();
+        if (gt === 'lose_fat' || gt === 'lose_weight' || gt === 'lose' || gt === 'emagrecimento' || gt === 'perder_peso') {
+          payload.goal_type = 'fat_loss';
+        } else if (gt === 'gain_muscle' || gt === 'gain' || gt === 'hipertrofia' || gt === 'ganhar_massa') {
+          payload.goal_type = 'muscle_gain';
+        } else if (gt === 'maintenance' || gt === 'manter' || gt === 'manutencao') {
+          payload.goal_type = 'maintain';
+        } else if (!['fat_loss', 'maintain', 'muscle_gain'].includes(gt)) {
+          payload.goal_type = 'maintain';
+        }
+      }
+
+      if (payload.sex) {
+        payload.sex = payload.sex === 'female' ? 'female' : 'male';
+      }
+
       // Upsert atômico (insere se não existir via profiles_insert_own, ou atualiza via profiles_update_own)
       let { data, error } = await supabase
         .from('profiles')
@@ -1297,82 +1331,70 @@ async function executeSupabaseMutation(method: 'POST' | 'PUT' | 'DELETE', endpoi
         .select()
         .single();
 
-      // Tolerância cirúrgica: se uma coluna não existir no schema remoto ou falhar, remove cirurgicamente
-      if (error && error.message) {
-        const msg = error.message.toLowerCase();
-        let changed = false;
+      // Se upsert falhar, tenta update direto (pois usuário já pode existir)
+      if (error) {
+        const { data: updateData, error: updateErr } = await supabase
+          .from('profiles')
+          .update(payload)
+          .eq('id', user!.id)
+          .select()
+          .single();
 
-        const candidateColumns = [
-          'birth_date',
-          'avatar_customization',
-          'initial_muscle_mass_pct',
-          'initial_checkin_date',
-          'initial_waist_cm',
-          'initial_body_fat_pct',
-          'initial_weight_kg',
-          'avatar_mascot_id',
-          'waist_cm',
-          'body_water_pct',
-          'basal_metabolism_kcal',
-          'metabolic_age',
-          'muscle_mass_pct',
-          'body_fat_pct',
-          'sex',
-        ];
-
-        // Se o erro for de formato de data, remove especificamente birth_date
-        if (msg.includes('date/time') || msg.includes('syntax for type date') || msg.includes('birth_date')) {
-          delete (payload as any)['birth_date'];
-          changed = true;
-        }
-
-        // 1. Tenta remoção cirúrgica da coluna específica identificada no erro
-        for (const col of candidateColumns) {
-          if (msg.includes(col) && col in payload) {
+        if (!updateErr && updateData) {
+          data = updateData;
+          error = null as any;
+        } else {
+          // Se ainda falhar, remove APENAS campos secundários opcionais
+          const nonEssentialCols = ['birth_date', 'avatar_customization', 'initial_checkin_date'];
+          for (const col of nonEssentialCols) {
             delete (payload as any)[col];
-            changed = true;
           }
-        }
-
-        // 2. Se identificou a coluna, tenta novamente mantendo todas as outras colunas
-        if (changed) {
-          const retrySingle = await supabase
+          const { data: retryData, error: retryErr } = await supabase
             .from('profiles')
-            .upsert(payload, { onConflict: 'id' })
+            .update(payload)
+            .eq('id', user!.id)
             .select()
             .single();
 
-          if (!retrySingle.error) {
-            data = { ...retrySingle.data, ...body };
+          if (!retryErr && retryData) {
+            data = retryData;
             error = null as any;
-          } else {
-            error = retrySingle.error;
           }
-        }
-
-        // 3. Fallback de segurança amplo apenas se o erro persistir
-        if (error) {
-          for (const col of candidateColumns) {
-            delete (payload as any)[col];
-          }
-          const retryAll = await supabase
-            .from('profiles')
-            .upsert(payload, { onConflict: 'id' })
-            .select()
-            .single();
-
-          if (retryAll.error) throw retryAll.error;
-          data = { ...retryAll.data, ...body };
         }
       }
-      return data;
+
+      // Retorna sempre com os dados atualizados preservando bioimpedância
+      return { ...payload, ...(data || {}) };
     }
 
     // Atualizar Metas
     if (endpoint === '/api/profile/targets') {
+      const sanitized: any = {
+        user_id: user!.id,
+        calories_target: body.calories_target,
+        protein_target_g: body.protein_target_g ?? body.protein_g_target,
+        carbs_target_g: body.carbs_target_g ?? body.carbs_g_target,
+        fats_target_g: body.fats_target_g ?? body.fats_g_target,
+        saturated_fats_target_g: body.saturated_fats_target_g,
+        fiber_target_g: body.fiber_target_g ?? body.fiber_g_target,
+        water_target_ml: body.water_target_ml,
+      };
+      // Remove chaves indefinidas
+      Object.keys(sanitized).forEach((k) => sanitized[k] === undefined && delete sanitized[k]);
+
+      // Se enviou meta semanal de treinos, atualiza na tabela profiles
+      if (body.weekly_workouts_target !== undefined && body.weekly_workouts_target !== null) {
+        try {
+          await supabase
+            .from('profiles')
+            .update({ weekly_workouts_target: Number(body.weekly_workouts_target) })
+            .eq('id', user!.id);
+        } catch {}
+      }
+
       const { data, error } = await supabase
         .from('daily_targets')
-        .upsert({ user_id: user!.id, ...body })
+        .upsert(sanitized, { onConflict: 'user_id' })
         .select()
         .single();
       if (error) throw error;
