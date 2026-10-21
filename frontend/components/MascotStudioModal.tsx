@@ -228,7 +228,7 @@ export const MascotStudioModal: React.FC<MascotStudioModalProps> = ({
       case 'suit':
         return custom.suitColor;
       case 'top':
-        return custom.topColor || '#f43f5e';
+        return custom.topColor || (selectedMascot === 'gaia' ? '#10b981' : '#18181b');
       case 'sneakers':
         return custom.sneakersColor || '#18181b';
       case 'skin':

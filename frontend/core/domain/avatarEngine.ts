@@ -74,6 +74,7 @@ export const DEFAULT_TITA_CUSTOMIZATION: MascotCustomization = {
   suitColor: '#18181b',     // Bermuda de academia preto carbono
   topColor: '#18181b',      // Top (não aplicável ao Titã topless)
   sneakersColor: '#18181b', // Tênis preto esportivo
+  hairColor: '#2b1d0c',     // Cabelo castanho escuro
   headbandColor: '#ef4444', // Legado
   skinTone: '#fde68a',      // Pele clara amigável
 };
@@ -82,8 +83,9 @@ export const DEFAULT_GAIA_CUSTOMIZATION: MascotCustomization = {
   eyeColor: '#10b981',      // Verde esmeralda radiante
   glovesColor: '#be123c',   // Legado
   suitColor: '#18181b',     // Leg short biker preto carbono
-  topColor: '#f43f5e',      // Top de academia coral/berry
+  topColor: '#10b981',      // Top atlético verde esmeralda radiante
   sneakersColor: '#18181b', // Tênis esportivo de treino
+  hairColor: '#452615',     // Cabelo castanho-caramelo sedoso
   headbandColor: '#facc15', // Legado
   skinTone: '#fde68a',      // Pele radiante
 };

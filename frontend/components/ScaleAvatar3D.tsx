@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, PanResponder, Platform } from 'react-native';
+import { View, Text, StyleSheet, PanResponder, Platform, Image } from 'react-native';
 import { GLView } from 'expo-gl';
 import { Renderer } from 'expo-three';
 import { Asset } from 'expo-asset';
@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three-stdlib';
 import { MascotId, BodyMorphology, MascotCustomization } from '../core/domain/avatarEngine';
 import { soundHaptics } from '../core/soundHaptics';
+import { getMascotImage } from '../assets/avatars';
 
 interface ScaleAvatar3DProps {
   mascotId: MascotId;
@@ -33,6 +34,19 @@ const MODEL_SRC: Record<MascotId, number> = {
 const IDLE_CLIP: Record<MascotId, string> = { tita: 'Idle', gaia: 'Idle' };
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+
+function isWebGLAvailable(): boolean {
+  if (Platform.OS !== 'web') return true;
+  if (typeof document === 'undefined') return false;
+  try {
+    const canvas = document.createElement('canvas');
+    return !!(
+      (canvas.getContext('webgl2') || canvas.getContext('webgl') || (canvas as any).getContext('experimental-webgl'))
+    );
+  } catch {
+    return false;
+  }
+}
 
 async function loadGLB(moduleId: number): Promise<ArrayBuffer> {
   const asset = Asset.fromModule(moduleId);
@@ -108,12 +122,14 @@ function buildPlatform(glowColor: string): THREE.Group {
   return group;
 }
 
-function applyMorphology(root: THREE.Object3D, m: BodyMorphology): void {
-  const arm = clamp(m.armBulk, 0.72, 1.55);
-  const leg = clamp(m.legBulk, 0.75, 1.48);
-  const torso = clamp(m.torsoWidth, 0.78, 1.45);
-  const belly = clamp(m.bellyVolume, 0.65, 1.65);
-  const waist = clamp(m.waistWidth, 0.68, 1.45);
+function applyMorphology(root: THREE.Object3D, m: BodyMorphology, mascotId?: MascotId): void {
+  const isGaia = mascotId === 'gaia';
+  // Calibração anatômica refinada: curvas femininas suaves e atléticas para Gaia
+  const arm = isGaia ? clamp(m.armBulk, 0.88, 1.28) : clamp(m.armBulk, 0.75, 1.45);
+  const leg = isGaia ? clamp(m.legBulk, 0.85, 1.30) : clamp(m.legBulk, 0.78, 1.42);
+  const torso = isGaia ? clamp(m.torsoWidth, 0.84, 1.26) : clamp(m.torsoWidth, 0.80, 1.38);
+  const belly = clamp(m.bellyVolume, 0.70, 1.58);
+  const waist = isGaia ? clamp(m.waistWidth, 0.74, 1.30) : clamp(m.waistWidth, 0.72, 1.40);
 
   root.traverse((o) => {
     if (o instanceof THREE.Bone) {
@@ -124,10 +140,18 @@ function applyMorphology(root: THREE.Object3D, m: BodyMorphology): void {
       let factorZ = 1;
       let factorY = 1;
 
-      if (/upperarm|lowerarm/.test(n)) {
+      // Escala apenas a raiz do membro para evitar herança composta de escala e
+      // distorção de cisalhamento (shearing) que quebra o cotovelo e o joelho
+      if (/upperarm/.test(n)) {
         factorX = arm; factorZ = arm;
-      } else if (/thigh|calf/.test(n)) {
+      } else if (/lowerarm/.test(n)) {
+        // Antebraço herda escala do upperarm; mantém escala neutra para evitar braço de Popeye
+        factorX = 1; factorZ = 1;
+      } else if (/thigh/.test(n)) {
         factorX = leg; factorZ = leg;
+      } else if (/calf/.test(n)) {
+        // Panturrilha herda escala da coxa; neutraliza para evitar efeito bexiga
+        factorX = 1; factorZ = 1;
       } else if (/spine_03|chest/.test(n)) {
         factorX = torso; factorZ = torso;
       } else if (/spine_02/.test(n)) {
@@ -227,11 +251,11 @@ function applyCustomization(root: THREE.Object3D, custom?: Partial<MascotCustomi
         if (/gym_shorts/i.test(name) && custom.suitColor) {
           mat.color.setStyle(custom.suitColor);
         } else if (/gym_top/i.test(name)) {
-          const topColor = custom.topColor || custom.suitColor;
+          const topColor = custom.topColor || (mascotId === 'gaia' ? '#10b981' : custom.suitColor);
           if (topColor) mat.color.setStyle(topColor);
         } else if (/sneaker_upper/i.test(name) && custom.sneakersColor) {
           mat.color.setStyle(custom.sneakersColor);
-        } else if (/hair/i.test(name) && custom.hairColor) {
+        } else if (/hair|eyebrow/i.test(name) && custom.hairColor) {
           mat.color.setStyle(custom.hairColor);
         } else if (/eyes/i.test(name) && custom.eyeColor) {
           mat.color.setStyle(custom.eyeColor);
@@ -263,8 +287,11 @@ export function ScaleAvatar3D({
   isInspecting = false,
   onInspectionTrigger,
   size = 260,
+  height,
   simple = false,
 }: ScaleAvatar3DProps) {
+  const [webGLSupported] = useState(() => isWebGLAvailable());
+  const [glError, setGlError] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const isMountedRef = useRef(true);
   const isInspectingRef = useRef(isInspecting);
@@ -322,22 +349,28 @@ export function ScaleAvatar3D({
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      if (sceneRef.current) {
-        sceneRef.current.traverse((o) => {
-          if (o instanceof THREE.Mesh) {
-            o.geometry?.dispose();
-            if (Array.isArray(o.material)) {
-              o.material.forEach((m) => m.dispose());
-            } else if (o.material) {
-              o.material.dispose();
+      try {
+        if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      } catch {}
+      try {
+        if (sceneRef.current) {
+          sceneRef.current.traverse((o) => {
+            if (o instanceof THREE.Mesh) {
+              o.geometry?.dispose();
+              if (Array.isArray(o.material)) {
+                o.material.forEach((m) => m.dispose());
+              } else if (o.material) {
+                o.material.dispose();
+              }
             }
-          }
-        });
-      }
-      if (rendererRef.current) {
-        rendererRef.current.dispose();
-      }
+          });
+        }
+      } catch {}
+      try {
+        if (rendererRef.current) {
+          rendererRef.current.dispose();
+        }
+      } catch {}
     };
   }, []);
 
@@ -348,7 +381,7 @@ export function ScaleAvatar3D({
   // Reatividade em tempo real: deforma o corpo no modelo 3D ao vivo
   useEffect(() => {
     if (modelRef.current) {
-      applyMorphology(modelRef.current, morphology);
+      applyMorphology(modelRef.current, morphology, mascotId);
     }
     if (ledRingRef.current && morphology.glowColor) {
       (ledRingRef.current.material as THREE.MeshBasicMaterial).color.setStyle(morphology.glowColor);
@@ -417,33 +450,38 @@ export function ScaleAvatar3D({
     camera.position.set(0, camY, camZ);
     camera.lookAt(0, targetY, 0);
 
-    // Rig Fotográfico 3-Pontos Estúdio Esportivo
-    // 1. Hemisphere Light (Gradiente céu esportivo frio -> piso escuro)
-    const hemi = new THREE.HemisphereLight(0xe0f2fe, 0x052e16, 0.75);
+    // Rig Fotográfico 3-Pontos Estúdio Esportivo & Beleza
+    // 1. Hemisphere Light (Ambiente caloroso e amigável que valoriza a pele)
+    const hemi = new THREE.HemisphereLight(0xfffbeb, 0x064e3b, 0.85);
     scene.add(hemi);
 
-    // 2. Luz Principal Quente (Key Light) com sombras suaves
-    const dir = new THREE.DirectionalLight(0xfffaed, 2.5);
-    dir.position.set(2.4, 4.2, 3.4);
+    // 2. Luz Principal Quente (Key Light) a 38° de altura lisonjeira
+    const dir = new THREE.DirectionalLight(0xfff8ee, 2.2);
+    dir.position.set(1.4, 2.3, 3.0);
     dir.castShadow = true;
     dir.shadow.mapSize.set(512, 512);
     dir.shadow.camera.far = 10;
     dir.shadow.bias = -0.001;
     scene.add(dir);
 
-    // 3. Luz de Preenchimento (Fill Light) para suavizar sombras do torso
-    const dir2 = new THREE.DirectionalLight(0x93c5fd, 0.7);
-    dir2.position.set(-2.6, 2.0, 1.8);
+    // 3. Luz de Preenchimento Suave (Warm Fill Light) para atenuar sombras faciais
+    const dir2 = new THREE.DirectionalLight(0xfef3c7, 1.0);
+    dir2.position.set(-2.0, 1.8, 2.4);
     scene.add(dir2);
 
-    // 4. Luz de Contorno Atlética (Rim Backlight) destacando ombros, trapézio e silhueta
-    const rim = new THREE.DirectionalLight(morphology.glowColor, 2.6);
-    rim.position.set(0, 3.2, -3.2);
+    // 4. Luz Frontal de Beleza (Beauty Catchlight para olhar vívido e rosto radiante)
+    const beauty = new THREE.DirectionalLight(0xffffff, 0.75);
+    beauty.position.set(0, 1.65, 2.8);
+    scene.add(beauty);
+
+    // 5. Luz de Contorno Atlética (Rim Backlight) destacando ombros, cabelo e silhueta
+    const rim = new THREE.DirectionalLight(morphology.glowColor, 2.4);
+    rim.position.set(0, 2.8, -2.8);
     scene.add(rim);
 
-    // 5. Luz de Bioimpedância da Balança
-    const point = new THREE.PointLight(morphology.glowColor, 5, 5);
-    point.position.set(0, 2.2, 0);
+    // 6. Luz de Bioimpedância da Balança
+    const point = new THREE.PointLight(morphology.glowColor, 4.5, 5);
+    point.position.set(0, 2.0, 0);
     scene.add(point);
     pointLightRef.current = point;
 
@@ -494,7 +532,7 @@ export function ScaleAvatar3D({
       modelRef.current = model;
       // Alinha os pés com precisão absoluta sobre o centro da balança circular
       model.position.set(0, 0, mascotId === 'gaia' ? 0.076 : 0.0875);
-      applyMorphology(model, morphology);
+      applyMorphology(model, morphology, mascotId);
       if (customization) {
         applyCustomization(model, customization, mascotId);
       }
@@ -521,30 +559,33 @@ export function ScaleAvatar3D({
               // Tecido de compressão atlético tipo Lycra/Under Armour com micro-trama
               mat.normalMap = fabricNormal;
               mat.normalScale = new THREE.Vector2(0.4, 0.4);
-              mat.roughness = 0.58;
+              mat.roughness = 0.54;
               mat.metalness = 0.04;
             } else if (/sneaker_sole/i.test(matName)) {
               // Solado esportivo com piso de tração
               mat.normalMap = soleNormal;
               mat.normalScale = new THREE.Vector2(0.6, 0.6);
-              mat.roughness = 0.85;
+              mat.roughness = 0.80;
               mat.metalness = 0.02;
             } else if (/sneaker_upper/i.test(matName)) {
-              mat.roughness = 0.45;
+              mat.roughness = 0.44;
               mat.metalness = 0.08;
             } else if (/hair/i.test(matName)) {
-              // Cabelo atlético com reflexo sedoso e disciplinado
-              mat.roughness = 0.42;
-              mat.metalness = 0.03;
+              // Cabelo atlético ondulado com reflexo sedoso e disciplinado
+              mat.roughness = 0.36;
+              mat.metalness = 0.04;
+            } else if (/eyebrow/i.test(matName)) {
+              mat.roughness = 0.45;
+              mat.metalness = 0.02;
             } else if (/eyes/i.test(matName)) {
               // Córnea vítrea com alto reflexo especular
-              mat.roughness = 0.12;
-              mat.metalness = 0.15;
+              mat.roughness = 0.10;
+              mat.metalness = 0.14;
             } else if (mat.map) {
               // Pele com normal maps anatômicos preservados
               mat.color.setHex(0xffffff);
               mat.metalness = 0.04;
-              mat.roughness = 0.52;
+              mat.roughness = 0.50;
             }
             mat.needsUpdate = true;
           }
@@ -644,11 +685,39 @@ export function ScaleAvatar3D({
       }}
       {...panResponder.panHandlers}
     >
-      <GLView
-        key={`${mascotId}-${size}-${viewHeight}`}
-        style={StyleSheet.absoluteFillObject}
-        onContextCreate={onContextCreate}
-      />
+      {!webGLSupported || glError ? (
+        <View style={[StyleSheet.absoluteFillObject, { alignItems: 'center', justifyContent: 'center' }]}>
+          <View
+            style={{
+              width: Math.min(viewWidth * 0.72, viewHeight * 0.72),
+              height: Math.min(viewWidth * 0.72, viewHeight * 0.72),
+              borderRadius: Math.min(viewWidth * 0.72, viewHeight * 0.72) / 2,
+              backgroundColor: '#071811',
+              borderWidth: 2,
+              borderColor: morphology.glowColor,
+              alignItems: 'center',
+              justifyContent: 'center',
+              overflow: 'hidden',
+              shadowColor: morphology.glowColor,
+              shadowOpacity: 0.45,
+              shadowRadius: 16,
+              elevation: 8,
+            }}
+          >
+            <Image
+              source={getMascotImage(`${mascotId}_athletic`)}
+              style={{ width: '85%', height: '85%' }}
+              resizeMode="contain"
+            />
+          </View>
+        </View>
+      ) : (
+        <GLView
+          key={`${mascotId}-${size}-${viewHeight}`}
+          style={StyleSheet.absoluteFillObject}
+          onContextCreate={onContextCreate}
+        />
+      )}
 
       <View
         pointerEvents="none"
