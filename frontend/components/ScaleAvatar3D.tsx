@@ -21,6 +21,7 @@ interface ScaleAvatar3DProps {
   isInspecting?: boolean;
   onInspectionTrigger?: () => void;
   size?: number;
+  height?: number;
   simple?: boolean;
 }
 
@@ -108,11 +109,11 @@ function buildPlatform(glowColor: string): THREE.Group {
 }
 
 function applyMorphology(root: THREE.Object3D, m: BodyMorphology): void {
-  const arm = clamp(m.armBulk, 0.75, 1.45);
-  const leg = clamp(m.legBulk, 0.75, 1.40);
-  const torso = clamp(m.torsoWidth, 0.80, 1.40);
-  const belly = clamp(m.bellyVolume, 0.70, 1.65);
-  const waist = clamp(m.waistWidth, 0.70, 1.45);
+  const arm = clamp(m.armBulk, 0.72, 1.55);
+  const leg = clamp(m.legBulk, 0.75, 1.48);
+  const torso = clamp(m.torsoWidth, 0.78, 1.45);
+  const belly = clamp(m.bellyVolume, 0.65, 1.65);
+  const waist = clamp(m.waistWidth, 0.68, 1.45);
 
   root.traverse((o) => {
     if (o instanceof THREE.Bone) {
@@ -141,15 +142,25 @@ function applyMorphology(root: THREE.Object3D, m: BodyMorphology): void {
       if (o.morphTargetInfluences && o.morphTargetDictionary) {
         const dict = o.morphTargetDictionary;
         if ('Fat_Belly' in dict) {
-          o.morphTargetInfluences[dict['Fat_Belly']] = clamp((m.bellyVolume - 0.95) / 0.45, 0, 1);
+          // Deformação anatômica expressiva de acordo com percentual real de gordura
+          o.morphTargetInfluences[dict['Fat_Belly']] = clamp((m.bellyVolume - 0.88) / 0.42, 0, 1);
         }
         if ('Muscle_Bulk' in dict) {
-          o.morphTargetInfluences[dict['Muscle_Bulk']] = clamp((m.armBulk - 0.95) / 0.35, 0, 1);
+          // Hipertrofia e densidade muscular atlética evidente
+          o.morphTargetInfluences[dict['Muscle_Bulk']] = clamp((m.armBulk - 0.90) / 0.32, 0, 1);
         }
         if ('Slim_Waist' in dict) {
-          o.morphTargetInfluences[dict['Slim_Waist']] = clamp((1.05 - m.waistWidth) / 0.30, 0, 1);
+          // Definição abdominal e afunilamento de cintura
+          o.morphTargetInfluences[dict['Slim_Waist']] = clamp((1.08 - m.waistWidth) / 0.28, 0, 1);
         }
       }
+    }
+  });
+
+  // Atualiza as matrizes esqueléticas na GPU imediatamente
+  root.traverse((o) => {
+    if (o instanceof THREE.SkinnedMesh && o.skeleton) {
+      o.skeleton.update();
     }
   });
 }
@@ -362,7 +373,7 @@ export function ScaleAvatar3D({
   const onContextCreate = async (gl: WebGLRenderingContext) => {
     const isWeb = Platform.OS === 'web';
     const viewWidth = size;
-    const viewHeight = Math.round(size * 1.38);
+    const viewHeight = height || Math.round(size * 1.38);
     const pixelRatio = isWeb && typeof window !== 'undefined'
       ? Math.min(window.devicePixelRatio || 1, 2)
       : 1;
@@ -394,13 +405,17 @@ export function ScaleAvatar3D({
     const scene = new THREE.Scene();
     sceneRef.current = scene;
 
-    // Enquadramento de Corpo Inteiro Perfeito (Head-to-Toe) com Respiro Superior Nobre
-    // Modelo altura 1.85m com respiração, postura ereta e balança na base
-    // Câmera Z=5.05 e FOV 34° com alvo em Y=0.92 centraliza perfeitamente o personagem dentro do círculo
+    // Enquadramento Concêntrico Milimétrico com o Círculo da Balança
+    // Centro de gravidade do modelo e balança em Y=0.94m
     const aspect = viewWidth / viewHeight;
-    const camera = new THREE.PerspectiveCamera(34, aspect, 0.1, 50);
-    camera.position.set(0, 0.96, 5.05);
-    camera.lookAt(0, 0.92, 0);
+    const isConcentric = aspect >= 0.85;
+    const fov = isConcentric ? 32 : 34;
+    const camera = new THREE.PerspectiveCamera(fov, aspect, 0.1, 50);
+    const camZ = isConcentric ? 4.25 : 4.95;
+    const camY = isConcentric ? 0.94 : 0.95;
+    const targetY = isConcentric ? 0.94 : 0.93;
+    camera.position.set(0, camY, camZ);
+    camera.lookAt(0, targetY, 0);
 
     // Rig Fotográfico 3-Pontos Estúdio Esportivo
     // 1. Hemisphere Light (Gradiente céu esportivo frio -> piso escuro)
@@ -614,7 +629,8 @@ export function ScaleAvatar3D({
   const showQuote = isInspecting && !simple;
 
   const viewWidth = size;
-  const viewHeight = Math.round(size * 1.38);
+  const viewHeight = height || Math.round(size * 1.38);
+  const isConcentric = viewWidth / viewHeight >= 0.85;
 
   return (
     <View
@@ -629,12 +645,18 @@ export function ScaleAvatar3D({
       {...panResponder.panHandlers}
     >
       <GLView
-        key={`${mascotId}-${size}`}
+        key={`${mascotId}-${size}-${viewHeight}`}
         style={StyleSheet.absoluteFillObject}
         onContextCreate={onContextCreate}
       />
 
-      <View pointerEvents="none" style={styles.weightBadge}>
+      <View
+        pointerEvents="none"
+        style={[
+          styles.weightBadge,
+          isConcentric ? { bottom: 14 } : null,
+        ]}
+      >
         <Text style={[styles.weightText, { color: morphology.glowColor }]}>
           {weightKg.toFixed(1)} kg
         </Text>

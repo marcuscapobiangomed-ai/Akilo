@@ -28,6 +28,7 @@ interface LivingAvatar3DProps {
   isInspecting?: boolean;
   onInspectionTrigger?: () => void;
   size?: number;
+  height?: number;
   simple?: boolean;
   hideBubble?: boolean;
   initialSpeech?: string;
@@ -44,6 +45,7 @@ export const LivingAvatar3D: React.FC<LivingAvatar3DProps> = ({
   isInspecting = false,
   onInspectionTrigger,
   size = 230,
+  height,
   simple = false,
   hideBubble = false,
   initialSpeech,
@@ -111,9 +113,10 @@ export const LivingAvatar3D: React.FC<LivingAvatar3DProps> = ({
   };
 
   const glowColor = morphology?.glowColor || (isTita ? '#22c55e' : '#10b981');
+  const stageHeight = height || Math.round(size * 1.38);
 
   return (
-    <View style={[styles.outerContainer, { width: size, height: Math.round(size * 1.38) }]}>
+    <View style={[styles.outerContainer, { width: size, height: stageHeight }]}>
       {/* 1. BALÃO DE FALA INTERATIVO */}
       {!hideBubble && activeSpeech ? (
         <Animated.View
@@ -163,6 +166,7 @@ export const LivingAvatar3D: React.FC<LivingAvatar3DProps> = ({
         isInspecting={isInspecting}
         onInspectionTrigger={handlePress}
         size={size}
+        height={height}
         simple={simple}
       />
 

@@ -1273,8 +1273,17 @@ export function evaluateMascot(input: MascotInput): MascotEvaluation {
   const baselineMuscle = sex === 'female' ? 28.0 : 34.0;
   const baselineFat = sex === 'female' ? 22.0 : 16.0;
 
+  // Estimativa clínica contínua calibrada quando o usuário ainda não possui bioimpedância
+  let estimatedFat = baselineFat;
+  if (!fatPct) {
+    if (bmi >= 35) estimatedFat = sex === 'female' ? 42.0 : 34.0;
+    else if (bmi >= 30) estimatedFat = sex === 'female' ? 36.0 : 28.0;
+    else if (bmi >= 25) estimatedFat = sex === 'female' ? 29.0 : 22.0;
+    else if (bmi <= 18.5) estimatedFat = sex === 'female' ? 16.0 : 10.0;
+  }
+
   const effectiveMuscle = musclePct || baselineMuscle;
-  const effectiveFat = fatPct || (bmi >= 27 ? 28 : bmi < 20 ? 12 : baselineFat);
+  const effectiveFat = fatPct || estimatedFat;
 
   const muscleDiff = effectiveMuscle - baselineMuscle;
   const fatDiff = effectiveFat - baselineFat;

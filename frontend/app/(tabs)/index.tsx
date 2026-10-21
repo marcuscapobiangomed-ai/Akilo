@@ -21,6 +21,7 @@ import { BioCheckinCeremonyModal } from '../../components/BioCheckinCeremonyModa
 import { NotificationsModal } from '../../components/NotificationsModal';
 import { evaluateBioReaction, type BioReactionResult } from '../../core/domain/bioReactionEngine';
 import { soundHaptics } from '../../core/soundHaptics';
+import { getLocalDateString } from '../../core/dateUtils';
 
 const { width } = Dimensions.get('window');
 
@@ -157,7 +158,7 @@ export default function Dashboard() {
         return;
       }
 
-      const today = new Date().toISOString().split('T')[0];
+      const today = getLocalDateString();
       const res = await api.get('/api/analytics/daily', { date: today });
       setData(res);
 
@@ -684,7 +685,8 @@ export default function Dashboard() {
                 muscleMassPct={profile?.muscle_mass_pct}
                 morphology={mascotEval.morphology}
                 customization={profile?.avatar_customization}
-                size={215}
+                size={256}
+                height={256}
                 simple={false}
                 hideBubble={true}
                 isInspecting={homeMascotInspect}
@@ -1818,12 +1820,12 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   heroStageContainer: {
-    width: 280,
-    height: 330,
+    width: 266,
+    height: 266,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-    marginVertical: 4,
+    marginVertical: 6,
   },
   heroProgressHalo: {
     position: 'absolute',

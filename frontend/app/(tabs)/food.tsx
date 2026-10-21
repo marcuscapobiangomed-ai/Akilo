@@ -21,6 +21,7 @@ import { dataEvents } from '../../core/dataEvents';
 import { calculatePortion, CalculatedNutrients, classifyNovaGroup } from '../../core/domain/nutritionEngine';
 import { soundHaptics } from '../../core/soundHaptics';
 import BarcodeScannerModal from '../../components/BarcodeScannerModal';
+import { getLocalDateString } from '../../core/dateUtils';
 
 const { width } = Dimensions.get('window');
 
@@ -185,7 +186,7 @@ export default function FoodSearch() {
 
     try {
       const payload = {
-        date: new Date().toISOString().split('T')[0],
+        date: getLocalDateString(),
         meal_type: mealType,
         food_source: selectedFood.is_custom || selectedFood.user_id ? 'custom' : 'master',
         food_master_id: selectedFood.is_custom || selectedFood.user_id ? null : selectedFood.id,

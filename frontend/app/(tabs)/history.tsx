@@ -8,6 +8,7 @@ import { useToast } from '../../components/Toast';
 import { HistorySkeleton } from '../../components/SkeletonLoader';
 import { dataEvents } from '../../core/dataEvents';
 import { searchFoodsLocal } from '../../core/foodDB';
+import { getLocalDateString } from '../../core/dateUtils';
 
 type MealType = 'breakfast' | 'lunch' | 'snacks' | 'dinner';
 
@@ -65,7 +66,7 @@ export default function History() {
   const [logs, setLogs] = useState<FoodLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(getLocalDateString());
   const { showToast } = useToast();
 
   // Modal de adicionar
@@ -127,9 +128,10 @@ export default function History() {
 
   // AÇÃO ANTI-ATRITO: Repetir Refeição de Ontem em 1 Toque
   const handleRepeatMeal = async (mealType: MealType) => {
-    const curr = new Date(selectedDate);
+    const [y, m, d] = selectedDate.split('-').map(Number);
+    const curr = new Date(y, m - 1, d);
     curr.setDate(curr.getDate() - 1);
-    const sourceDate = curr.toISOString().split('T')[0];
+    const sourceDate = getLocalDateString(curr);
 
     setRepeatingMeal(mealType);
     try {
