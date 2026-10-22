@@ -124,58 +124,160 @@ function buildPlatform(glowColor: string): THREE.Group {
 
 function applyMorphology(root: THREE.Object3D, m: BodyMorphology, mascotId?: MascotId): void {
   const isGaia = mascotId === 'gaia';
-  // Calibração anatômica refinada: curvas femininas suaves e atléticas para Gaia
-  const arm = isGaia ? clamp(m.armBulk, 0.88, 1.28) : clamp(m.armBulk, 0.75, 1.45);
-  const leg = isGaia ? clamp(m.legBulk, 0.85, 1.30) : clamp(m.legBulk, 0.78, 1.42);
-  const torso = isGaia ? clamp(m.torsoWidth, 0.84, 1.26) : clamp(m.torsoWidth, 0.80, 1.38);
-  const belly = clamp(m.bellyVolume, 0.70, 1.58);
-  const waist = isGaia ? clamp(m.waistWidth, 0.74, 1.30) : clamp(m.waistWidth, 0.72, 1.40);
+  // Calibração de limites anatômicos fisiológicos
+  const arm = isGaia ? clamp(m.armBulk, 0.85, 1.25) : clamp(m.armBulk, 0.80, 1.30);
+  const leg = isGaia ? clamp(m.legBulk, 0.85, 1.35) : clamp(m.legBulk, 0.80, 1.35);
+  const torso = isGaia ? clamp(m.torsoWidth, 0.82, 1.22) : clamp(m.torsoWidth, 0.80, 1.25);
+  const belly = isGaia ? clamp(m.bellyVolume, 0.75, 1.45) : clamp(m.bellyVolume, 0.75, 1.65);
+  const waist = isGaia ? clamp(m.waistWidth, 0.75, 1.35) : clamp(m.waistWidth, 0.75, 1.45);
 
+  // Mapeia todos os ossos do esqueleto
+  const bones: Record<string, THREE.Bone> = {};
   root.traverse((o) => {
     if (o instanceof THREE.Bone) {
       if (!o.userData.__baseScale) o.userData.__baseScale = o.scale.clone();
-      const base: THREE.Vector3 = o.userData.__baseScale;
-      const n = o.name.toLowerCase();
-      let factorX = 1;
-      let factorZ = 1;
-      let factorY = 1;
+      bones[o.name.toLowerCase()] = o;
+    }
+  });
 
-      // Escala apenas a raiz do membro para evitar herança composta de escala e
-      // distorção de cisalhamento (shearing) que quebra o cotovelo e o joelho
-      if (/upperarm/.test(n)) {
-        factorX = arm; factorZ = arm;
-      } else if (/lowerarm/.test(n)) {
-        // Antebraço herda escala do upperarm; mantém escala neutra para evitar braço de Popeye
-        factorX = 1; factorZ = 1;
-      } else if (/thigh/.test(n)) {
-        factorX = leg; factorZ = leg;
-      } else if (/calf/.test(n)) {
-        // Panturrilha herda escala da coxa; neutraliza para evitar efeito bexiga
-        factorX = 1; factorZ = 1;
-      } else if (/spine_03|chest/.test(n)) {
-        factorX = torso; factorZ = torso;
-      } else if (/spine_02/.test(n)) {
-        factorX = belly; factorZ = belly;
-      } else if (/spine_01|pelvis/.test(n)) {
-        factorX = waist; factorZ = waist;
-      }
-      o.scale.set(base.x * factorX, base.y * factorY, base.z * factorZ);
-    } else if (o instanceof THREE.Mesh) {
+  // HIERARQUIA COMPENSADA: Elimina a multiplicação exponencial da coluna sobre os membros
+  // 1. Pelvis (Base do quadril e cintura inferior)
+  // Dimorfismo Sexual: Pelve feminina (Gaia) tem expansão lateral ginoide nos quadris
+  const pelvisFactor = clamp(waist * 0.95, 0.85, 1.35);
+  const pelvisFactorX = isGaia ? clamp(pelvisFactor * 1.08, 0.85, 1.45) : pelvisFactor;
+  if (bones['pelvis']) {
+    const base = bones['pelvis'].userData.__baseScale;
+    bones['pelvis'].scale.set(base.x * pelvisFactorX, base.y * 1.0, base.z * pelvisFactor);
+  }
+
+  // 2. Spine_01 (Cintura) - compensado em relação à pelve
+  const spine01Factor = clamp(waist / pelvisFactor, 0.80, 1.35);
+  if (bones['spine_01']) {
+    const base = bones['spine_01'].userData.__baseScale;
+    bones['spine_01'].scale.set(base.x * spine01Factor, base.y * 1.0, base.z * spine01Factor);
+  }
+
+  // 3. Spine_02 (Abdômen / Projeção de Barriga)
+  // Para sobrepeso e gordura elevada (belly > 1.10), projeta o abdômen para a frente no eixo Z
+  const spine02FactorX = clamp(belly / waist, 0.80, 1.35);
+  const bellySagittalBonus = clamp((belly - 1.0) * 1.4, 0, 0.60);
+  const spine02FactorZ = clamp(spine02FactorX + bellySagittalBonus, 0.80, 1.65);
+  if (bones['spine_02']) {
+    const base = bones['spine_02'].userData.__baseScale;
+    bones['spine_02'].scale.set(base.x * spine02FactorX, base.y * 1.0, base.z * spine02FactorZ);
+  }
+
+  // 4. Spine_03 (Tórax / Peitoral) - compensado em relação ao abdômen para NÃO inflar o peito quando a barriga cresce
+  const spine03Factor = clamp(torso / belly, 0.65, 1.15);
+  if (bones['spine_03']) {
+    const base = bones['spine_03'].userData.__baseScale;
+    bones['spine_03'].scale.set(base.x * spine03Factor, base.y * 1.0, base.z * spine03Factor);
+  }
+
+  // 5. Clavículas (ombros) - mantidas neutras para preservar deltoides naturais
+  ['clavicle_l', 'clavicle_r'].forEach((n) => {
+    if (bones[n]) {
+      const base = bones[n].userData.__baseScale;
+      bones[n].scale.set(base.x, base.y, base.z);
+    }
+  });
+
+  // 6. Pescoço e Cabeça - compensados em relação ao tórax para manter a cabeça em escala natural (1.0)
+  if (bones['neck_01']) {
+    const headComp = clamp(1.0 / torso, 0.75, 1.25);
+    const base = bones['neck_01'].userData.__baseScale;
+    bones['neck_01'].scale.set(base.x * headComp, base.y * headComp, base.z * headComp);
+  }
+  if (bones['head']) {
+    const base = bones['head'].userData.__baseScale;
+    bones['head'].scale.set(base.x, base.y, base.z);
+  }
+
+  // 7. Braços (upperarm / lowerarm / hand)
+  // REGRA DE OURO DO THREE.JS: Escala isotrópica (X=Y=Z) para ELIMINAR COMPLETAMENTE o cisalhamento (shearing/deformação Popeye)
+  // Compensado em relação ao torso
+  const armScale = clamp(arm / torso, 0.75, 1.25);
+  ['upperarm_l', 'upperarm_r'].forEach((n) => {
+    if (bones[n]) {
+      const base = bones[n].userData.__baseScale;
+      bones[n].scale.set(base.x * armScale, base.y * armScale, base.z * armScale);
+    }
+  });
+  ['lowerarm_l', 'lowerarm_r'].forEach((n) => {
+    if (bones[n]) {
+      const base = bones[n].userData.__baseScale;
+      bones[n].scale.set(base.x, base.y, base.z);
+    }
+  });
+  ['hand_l', 'hand_r'].forEach((n) => {
+    if (bones[n]) {
+      const base = bones[n].userData.__baseScale;
+      bones[n].scale.set(base.x, base.y, base.z);
+    }
+  });
+
+  // 8. Pernas (thigh / calf / foot)
+  // Escala isotrópica compensada em relação à pelve para dar sustentação muscular sólida sem distorções
+  const legScale = clamp(leg / pelvisFactor, 0.75, 1.28);
+  // Dimorfismo Sexual: Padrão ginoide feminino (Gaia) acumula proporção maior de adiposidade nas coxas e quadris
+  const thighGynoidBonus = isGaia ? clamp((leg - 1.0) * 0.35, 0, 0.15) : 0;
+  const finalThighScale = clamp(legScale + thighGynoidBonus, 0.75, 1.35);
+  ['thigh_l', 'thigh_r'].forEach((n) => {
+    if (bones[n]) {
+      const base = bones[n].userData.__baseScale;
+      bones[n].scale.set(base.x * finalThighScale, base.y * finalThighScale, base.z * finalThighScale);
+    }
+  });
+  ['calf_l', 'calf_r'].forEach((n) => {
+    if (bones[n]) {
+      const base = bones[n].userData.__baseScale;
+      bones[n].scale.set(base.x, base.y, base.z);
+    }
+  });
+  ['foot_l', 'foot_r'].forEach((n) => {
+    if (bones[n]) {
+      const base = bones[n].userData.__baseScale;
+      bones[n].scale.set(base.x, base.y, base.z);
+    }
+  });
+
+  // 9. Morph Targets & Materiais PBR
+  root.traverse((o) => {
+    if (o instanceof THREE.Mesh) {
       o.castShadow = true;
-      // Variações corporais contínuas por bioimpedância (Shape Keys / Morph Targets)
       if (o.morphTargetInfluences && o.morphTargetDictionary) {
         const dict = o.morphTargetDictionary;
         if ('Fat_Belly' in dict) {
-          // Deformação anatômica expressiva de acordo com percentual real de gordura
-          o.morphTargetInfluences[dict['Fat_Belly']] = clamp((m.bellyVolume - 0.88) / 0.42, 0, 1);
+          // Deformação da camada de gordura abdominal guiada pelo volume de barriga
+          o.morphTargetInfluences[dict['Fat_Belly']] = clamp((belly - 0.92) / 0.32, 0, 1);
         }
         if ('Muscle_Bulk' in dict) {
-          // Hipertrofia e densidade muscular atlética evidente
-          o.morphTargetInfluences[dict['Muscle_Bulk']] = clamp((m.armBulk - 0.90) / 0.32, 0, 1);
+          // Densidade muscular atlética: SÓ ativa se a definição muscular for real (sem camada de gordura excessiva)
+          const bulkFactor = m.muscleDefinition < 0.22
+            ? 0.0
+            : clamp((m.armBulk - 0.90) / 0.35, 0, 1) * clamp(m.muscleDefinition, 0, 1);
+          o.morphTargetInfluences[dict['Muscle_Bulk']] = bulkFactor;
         }
         if ('Slim_Waist' in dict) {
-          // Definição abdominal e afunilamento de cintura
-          o.morphTargetInfluences[dict['Slim_Waist']] = clamp((1.08 - m.waistWidth) / 0.28, 0, 1);
+          // Afunilamento de cintura (apenas com cintura fina E definição)
+          const slimFactor = clamp((1.05 - m.waistWidth) / 0.25, 0, 1) * clamp(m.muscleDefinition, 0, 1);
+          o.morphTargetInfluences[dict['Slim_Waist']] = slimFactor;
+        }
+      }
+
+      // Reatividade fisiológica imediata dos materiais PBR
+      if (o.material) {
+        const materials = Array.isArray(o.material) ? o.material : [o.material];
+        for (const mat of materials) {
+          const matName = (mat.name || o.name || '').toLowerCase();
+          if (mat.normalMap && (/superhero|body|skin/i.test(matName) || mat.map)) {
+            // Modulação da definição muscular: desliga gominhos no sobrepeso (< 0.18)
+            const defScale = m.muscleDefinition < 0.18 ? 0.0 : clamp(m.muscleDefinition, 0.05, 1.0);
+            mat.normalScale.set(defScale, defScale);
+            // Suaviza a rugosidade: camada adiposa dissipa reflexos especulares agudos
+            mat.roughness = clamp(0.55 + (1 - defScale) * 0.20, 0.50, 0.75);
+            mat.needsUpdate = true;
+          }
         }
       }
     }
@@ -581,11 +683,17 @@ export function ScaleAvatar3D({
               // Córnea vítrea com alto reflexo especular
               mat.roughness = 0.10;
               mat.metalness = 0.14;
-            } else if (mat.map) {
-              // Pele com normal maps anatômicos preservados
-              mat.color.setHex(0xffffff);
+            } else if (mat.map || /superhero|body|skin/i.test(matName)) {
+              // Pele com normal maps anatômicos modulados pela bioimpedância
+              if (!customization?.skinTone || customization.skinTone === '#fde68a') {
+                mat.color.setHex(0xffffff);
+              }
               mat.metalness = 0.04;
-              mat.roughness = 0.50;
+              const defScale = morphology.muscleDefinition < 0.18 ? 0.0 : clamp(morphology.muscleDefinition, 0.05, 1.0);
+              if (mat.normalMap) {
+                mat.normalScale = new THREE.Vector2(defScale, defScale);
+              }
+              mat.roughness = clamp(0.55 + (1 - defScale) * 0.20, 0.50, 0.75);
             }
             mat.needsUpdate = true;
           }
@@ -705,7 +813,7 @@ export function ScaleAvatar3D({
             }}
           >
             <Image
-              source={getMascotImage(`${mascotId}_athletic`)}
+              source={getMascotImage(morphology?.assetKey || (mascotId === 'gaia' ? 'gaia_robust' : 'tita_robust'))}
               style={{ width: '85%', height: '85%' }}
               resizeMode="contain"
             />

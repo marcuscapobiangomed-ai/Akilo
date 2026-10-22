@@ -1,6 +1,6 @@
 import { View, Text, TouchableOpacity, StyleSheet, TextInput, ScrollView, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'expo-router';
 import { api } from '../../core/api';
 import { supabase } from '../../core/supabase';
@@ -30,8 +30,13 @@ import { useToast } from '../../components/Toast';
 import { markOnboardingComplete } from '../../core/onboarding';
 import { calculateScientificTargets, BiologicalSex } from '../../core/domain/nutritionEngine';
 import { LivingAvatar3D } from '../../components/LivingAvatar3D';
-import { evaluateMascot, MascotId } from '../../core/domain/avatarEngine';
 import { soundHaptics } from '../../core/soundHaptics';
+import {
+  evaluateMascot,
+  MascotId,
+  analyzeAndCorrectMuscleInput,
+  analyzeAndCorrectWaistInput,
+} from '../../core/domain/avatarEngine';
 
 type Goal = 'muscle_gain' | 'fat_loss' | 'maintain';
 type ActivityLevel = 'low' | 'medium' | 'high';
@@ -183,12 +188,25 @@ export default function Onboarding() {
     soundHaptics.triggerLightTap();
   };
 
+  const muscleCorrection = useMemo(
+    () => analyzeAndCorrectMuscleInput(muscleMass, sex),
+    [muscleMass, sex]
+  );
+  const waistCorrection = useMemo(
+    () => analyzeAndCorrectWaistInput(waist),
+    [waist]
+  );
+
   const parsedHeight = parseInt(height, 10) || 170;
   const parsedWeight = parseFloat(weight.replace(',', '.')) || 70;
   const parsedAge = parseInt(age, 10) || 28;
   const parsedBodyFat = bodyFat ? parseFloat(bodyFat.replace(',', '.')) : null;
-  const parsedMuscleMass = muscleMass ? parseFloat(muscleMass.replace(',', '.')) : null;
-  const parsedWaist = waist ? parseFloat(waist.replace(',', '.')) : null;
+  const parsedMuscleMass = muscleCorrection.isCorrected
+    ? muscleCorrection.correctedNum
+    : (muscleMass ? parseFloat(muscleMass.replace(',', '.')) : null);
+  const parsedWaist = waistCorrection.isCorrected
+    ? waistCorrection.correctedNum
+    : (waist ? parseFloat(waist.replace(',', '.')) : null);
 
   // Avaliação 3D e Morfologia corporal reativa aos dados reais de bioimpedância
   const mascotEval = evaluateMascot({
@@ -241,8 +259,8 @@ export default function Onboarding() {
       const parsedHeightVal = parseInt(height, 10) || 170;
       const parsedWeightVal = parseFloat(weight.replace(',', '.')) || 70;
       const parsedFatVal = bodyFat ? parseFloat(bodyFat.replace(',', '.')) : null;
-      const parsedMuscleVal = muscleMass ? parseFloat(muscleMass.replace(',', '.')) : null;
-      const parsedWaistVal = waist ? parseFloat(waist.replace(',', '.')) : null;
+      const parsedMuscleVal = parsedMuscleMass;
+      const parsedWaistVal = parsedWaist;
 
       const today = getLocalDateString();
       const { data: { session } } = await supabase.auth.getSession();
@@ -619,12 +637,25 @@ export default function Onboarding() {
                       style={styles.input}
                       value={muscleMass}
                       onChangeText={setMuscleMass}
+                      onBlur={() => {
+                        if (muscleCorrection.isCorrected) {
+                          setMuscleMass(muscleCorrection.correctedStr);
+                        }
+                      }}
                       keyboardType="decimal-pad"
                       placeholder={sex === 'female' ? 'Ex: 32.0' : 'Ex: 40.0'}
                       placeholderTextColor="#6b7280"
                     />
                     <Text style={styles.unitText}>%</Text>
                   </View>
+                  {muscleCorrection.isCorrected && (
+                    <View style={styles.correctionNotice}>
+                      <Sparkles color="#38bdf8" size={12} />
+                      <Text style={styles.correctionNoticeText}>
+                        {muscleCorrection.message}
+                      </Text>
+                    </View>
+                  )}
                 </View>
               </View>
 
@@ -638,12 +669,25 @@ export default function Onboarding() {
                     style={styles.input}
                     value={waist}
                     onChangeText={setWaist}
+                    onBlur={() => {
+                      if (waistCorrection.isCorrected) {
+                        setWaist(waistCorrection.correctedStr);
+                      }
+                    }}
                     keyboardType="decimal-pad"
                     placeholder="Ex: 82"
                     placeholderTextColor="#6b7280"
                   />
                   <Text style={styles.unitText}>cm</Text>
                 </View>
+                {waistCorrection.isCorrected && (
+                  <View style={styles.correctionNotice}>
+                    <Sparkles color="#38bdf8" size={12} />
+                    <Text style={styles.correctionNoticeText}>
+                      {waistCorrection.message}
+                    </Text>
+                  </View>
+                )}
               </View>
             </View>
 
@@ -1330,4 +1374,23 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.45 },
   primaryButtonText: { color: '#0a1a15', fontSize: 16, fontWeight: 'bold' },
+  correctionNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#0c2738',
+    borderColor: '#38bdf880',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    marginTop: 6,
+  },
+  correctionNoticeText: {
+    color: '#bae6fd',
+    fontSize: 11,
+    lineHeight: 15,
+    flex: 1,
+    fontWeight: '500',
+  },
 });

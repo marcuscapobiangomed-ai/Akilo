@@ -1,6 +1,6 @@
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Modal, TextInput, Alert, Dimensions, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { api } from '../../core/api';
 import { supabase } from '../../core/supabase';
 import { useRouter } from 'expo-router';
@@ -37,7 +37,7 @@ import { useToast } from '../../components/Toast';
 import { ProfileSkeleton } from '../../components/SkeletonLoader';
 import { dataEvents } from '../../core/dataEvents';
 import { calculateBMI, estimateBMR, evaluateMetabolicAge, evaluateBodyFat, BiologicalSex } from '../../core/domain/bodyComposition';
-import { evaluateMascot, getDetailedMilestones, type MascotId, type MascotCustomization, type DetailedMilestone } from '../../core/domain/avatarEngine';
+import { evaluateMascot, getDetailedMilestones, analyzeAndCorrectMuscleInput, analyzeAndCorrectWaistInput, type MascotId, type MascotCustomization, type DetailedMilestone } from '../../core/domain/avatarEngine';
 import { getMascotImage } from '../../assets/avatars';
 import { LivingAvatar3D } from '../../components/LivingAvatar3D';
 import { MascotStudioModal } from '../../components/MascotStudioModal';
@@ -132,6 +132,15 @@ export default function Profile() {
     avatarMascotId: 'tita',
   });
   const [savingProfile, setSavingProfile] = useState(false);
+
+  // Análise e autocorreção fisiológica em tempo real no perfil
+  const editMuscleCorrection = useMemo(() => {
+    return analyzeAndCorrectMuscleInput(editProfile.muscleMass, editProfile.sex);
+  }, [editProfile.muscleMass, editProfile.sex]);
+
+  const editWaistCorrection = useMemo(() => {
+    return analyzeAndCorrectWaistInput(editProfile.waist);
+  }, [editProfile.waist]);
 
   // Modal de Exclusão Definitiva de Conta (Apple 5.1.1(v) & LGPD)
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
@@ -290,9 +299,9 @@ export default function Profile() {
       const parsedAge = editProfile.age ? parseInt(editProfile.age, 10) : null;
 
       const parsedBodyFat = editProfile.bodyFat ? parseFloat(editProfile.bodyFat.replace(',', '.')) : null;
-      const parsedMuscleMass = editProfile.muscleMass ? parseFloat(editProfile.muscleMass.replace(',', '.')) : null;
+      const parsedMuscleMass = editMuscleCorrection.isCorrected ? editMuscleCorrection.correctedNum : (editProfile.muscleMass ? parseFloat(editProfile.muscleMass.replace(',', '.')) : null);
       const parsedBodyWater = editProfile.bodyWater ? parseFloat(editProfile.bodyWater.replace(',', '.')) : null;
-      const parsedWaist = editProfile.waist ? parseFloat(editProfile.waist.replace(',', '.')) : null;
+      const parsedWaist = editWaistCorrection.isCorrected ? editWaistCorrection.correctedNum : (editProfile.waist ? parseFloat(editProfile.waist.replace(',', '.')) : null);
       const parsedInitialWeight = editProfile.initialWeight ? parseFloat(editProfile.initialWeight.replace(',', '.')) : null;
       const parsedBasal = editProfile.basalMetabolism ? parseInt(editProfile.basalMetabolism, 10) : null;
       const parsedMetabolicAge = editProfile.metabolicAge ? parseInt(editProfile.metabolicAge, 10) : null;
@@ -1523,10 +1532,23 @@ export default function Profile() {
                     style={styles.input}
                     value={editProfile.muscleMass}
                     onChangeText={(v) => setEditProfile((prev) => ({ ...prev, muscleMass: v }))}
+                    onBlur={() => {
+                      if (editMuscleCorrection.isCorrected) {
+                        setEditProfile((prev) => ({ ...prev, muscleMass: editMuscleCorrection.correctedStr }));
+                      }
+                    }}
                     keyboardType="decimal-pad"
                     placeholder="ex: 38.0"
                     placeholderTextColor="#6b7280"
                   />
+                  {editMuscleCorrection.isCorrected && (
+                    <View style={styles.correctionNotice}>
+                      <Sparkles size={13} color="#38bdf8" />
+                      <Text style={styles.correctionNoticeText}>
+                        {editMuscleCorrection.message}
+                      </Text>
+                    </View>
+                  )}
                 </View>
               </View>
 
@@ -1563,10 +1585,23 @@ export default function Profile() {
                     style={styles.input}
                     value={editProfile.waist}
                     onChangeText={(v) => setEditProfile((prev) => ({ ...prev, waist: v }))}
+                    onBlur={() => {
+                      if (editWaistCorrection.isCorrected) {
+                        setEditProfile((prev) => ({ ...prev, waist: editWaistCorrection.correctedStr }));
+                      }
+                    }}
                     keyboardType="decimal-pad"
                     placeholder="ex: 85.0"
                     placeholderTextColor="#6b7280"
                   />
+                  {editWaistCorrection.isCorrected && (
+                    <View style={styles.correctionNotice}>
+                      <Sparkles size={13} color="#38bdf8" />
+                      <Text style={styles.correctionNoticeText}>
+                        {editWaistCorrection.message}
+                      </Text>
+                    </View>
+                  )}
                 </View>
 
                 <View style={[styles.inputGroup, { flex: 1 }]}>
@@ -1864,6 +1899,8 @@ export default function Profile() {
         heightCm={currentHeight || 170}
         bodyFatPct={profile?.body_fat_pct}
         muscleMassPct={profile?.muscle_mass_pct}
+        waistCm={profile?.waist_cm}
+        sex={currentSex}
         onSave={handleSaveMascotCustomization}
       />
 
@@ -2885,5 +2922,24 @@ const styles = StyleSheet.create({
     color: '#22c55e',
     fontSize: 10,
     fontWeight: 'bold',
+  },
+  correctionNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#0c2738',
+    borderColor: '#38bdf880',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    marginTop: 6,
+  },
+  correctionNoticeText: {
+    color: '#bae6fd',
+    fontSize: 11,
+    lineHeight: 15,
+    flex: 1,
+    fontWeight: '500',
   },
 });

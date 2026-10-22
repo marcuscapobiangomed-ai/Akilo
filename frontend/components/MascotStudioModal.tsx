@@ -24,6 +24,7 @@ import { LivingAvatar3D } from './LivingAvatar3D';
 import {
   MascotId,
   MascotCustomization,
+  BiologicalSex,
   CUSTOMIZATION_PALETTES,
   DEFAULT_TITA_CUSTOMIZATION,
   DEFAULT_GAIA_CUSTOMIZATION,
@@ -42,6 +43,8 @@ interface MascotStudioModalProps {
   heightCm: number;
   bodyFatPct?: number | null;
   muscleMassPct?: number | null;
+  waistCm?: number | null;
+  sex?: BiologicalSex;
   onSave: (mascotId: MascotId, custom: MascotCustomization) => Promise<void> | void;
 }
 
@@ -63,6 +66,8 @@ export const MascotStudioModal: React.FC<MascotStudioModalProps> = ({
   heightCm,
   bodyFatPct,
   muscleMassPct,
+  waistCm,
+  sex,
   onSave,
 }) => {
   const [selectedMascot, setSelectedMascot] = useState<MascotId>(mascotId);
@@ -90,6 +95,7 @@ export const MascotStudioModal: React.FC<MascotStudioModalProps> = ({
         suitColor: customization?.suitColor || defaultForId.suitColor,
         topColor: customization?.topColor || defaultForId.topColor,
         sneakersColor: customization?.sneakersColor || defaultForId.sneakersColor,
+        hairColor: customization?.hairColor || defaultForId.hairColor,
         skinTone: customization?.skinTone || defaultForId.skinTone,
       });
     }
@@ -98,11 +104,12 @@ export const MascotStudioModal: React.FC<MascotStudioModalProps> = ({
   // Recalcula a morfologia em tempo real para o mascote atualizado
   const previewEval = evaluateMascot({
     mascotId: selectedMascot,
-    sex: selectedMascot === 'gaia' ? 'female' : 'male',
+    sex: sex || (selectedMascot === 'gaia' ? 'female' : 'male'),
     weightKg: weightKg || 70,
     heightCm: heightCm || 170,
     bodyFatPct,
     muscleMassPct,
+    waistCm,
     customization: custom,
   });
 
@@ -145,6 +152,7 @@ export const MascotStudioModal: React.FC<MascotStudioModalProps> = ({
       suitColor: prev.suitColor || defaultForId.suitColor,
       topColor: prev.topColor || defaultForId.topColor,
       sneakersColor: prev.sneakersColor || defaultForId.sneakersColor,
+      hairColor: prev.hairColor || defaultForId.hairColor,
     }));
   };
 

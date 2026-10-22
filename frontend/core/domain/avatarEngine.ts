@@ -55,6 +55,10 @@ export interface MascotEvaluation {
   unlockedCosmetics: string[];
   // Morfologia Corporal 3D Paramétrica (guiada por Peso + % Gordura + % Massa Muscular)
   morphology: BodyMorphology;
+  // Métricas fisiológicas efetivas e sanitizadas
+  effectiveFatPct?: number;
+  effectiveMusclePct?: number;
+  effectiveWaistCm?: number;
 }
 
 export interface MascotCustomization {
@@ -165,6 +169,7 @@ export interface BodyMorphology {
   glowColor: string;         // Cor do pulso de bioimpedância
   inspectionQuote: string;   // Frase ao olhar para o próprio corpo
   customization: MascotCustomization; // Personalização estética das cores
+  assetKey?: string;         // Chave do asset 2D correspondente à morfologia
 }
 
 export interface MascotInput {
@@ -1025,7 +1030,7 @@ export function evaluateHypertrophyLadder(mascotId: MascotId, weightKg: number):
 export function evaluateMascot(input: MascotInput): MascotEvaluation {
   const safeInput = input || ({} as any);
   const sex: BiologicalSex = safeInput.sex === 'female' || safeInput.mascotId === 'gaia' ? 'female' : 'male';
-  const mascotId: MascotId = safeInput.mascotId === 'gaia' ? 'gaia' : 'tita';
+  const mascotId: MascotId = safeInput.mascotId === 'gaia' ? 'gaia' : (safeInput.sex === 'female' ? 'gaia' : 'tita');
   const mascotName = mascotId === 'gaia' ? 'Gaia' : 'Titã';
 
   const rawWeight = Number(safeInput.weightKg);
@@ -1036,16 +1041,58 @@ export function evaluateMascot(input: MascotInput): MascotEvaluation {
   const bmiRaw = heightM > 0 && weight > 0 ? (weight / (heightM * heightM)) : 24.0;
   const bmi = isFinite(bmiRaw) && bmiRaw > 0 ? Math.round(bmiRaw * 10) / 10 : 24.0;
 
-  const rawFat = safeInput.bodyFatPct !== undefined && safeInput.bodyFatPct !== null ? Number(safeInput.bodyFatPct) : undefined;
-  const fatPct = rawFat !== undefined && !isNaN(rawFat) && isFinite(rawFat) && rawFat >= 0 ? Math.min(80, rawFat) : undefined;
-  const rawMuscle = safeInput.muscleMassPct !== undefined && safeInput.muscleMassPct !== null ? Number(safeInput.muscleMassPct) : undefined;
-  const musclePct = rawMuscle !== undefined && !isNaN(rawMuscle) && isFinite(rawMuscle) && rawMuscle >= 0 ? Math.min(95, rawMuscle) : undefined;
+  // 0. Estimativa Clínica Antropométrica Contínua (Deurenberg & SBMEE / ABESO)
+  // Utilizada como base e fallback dinâmico para quando o usuário não tiver bioimpedância completa
+  const defaultAge = 28;
+  const sexFactor = sex === 'female' ? 0 : 1;
+  const deurenbergFat = 1.20 * bmi + 0.23 * defaultAge - 10.8 * sexFactor - 5.4;
+  const estimatedFat = Math.round(
+    Math.min(Math.max(deurenbergFat, sex === 'female' ? 18.0 : 10.0), sex === 'female' ? 48.0 : 42.0) * 10
+  ) / 10;
+  const estimatedMuscle = Math.round(
+    Math.min(Math.max((100 - estimatedFat) * 0.455, sex === 'female' ? 22.0 : 28.0), sex === 'female' ? 35.0 : 42.0) * 10
+  ) / 10;
+  const estimatedWaist = sex === 'female'
+    ? Math.round((64.0 + Math.max(0, bmi - 21.0) * 2.2) * 10) / 10
+    : Math.round((72.0 + Math.max(0, bmi - 22.0) * 2.4) * 10) / 10;
 
-  // 1. Cálculo do Peso Meta e Diferencial
+  // 1. Sanitização e Validação Fisiológica Clínica (ABESO, SBMEE, ACSM)
+  // Gordura Corporal (%):
+  const rawFat = safeInput.bodyFatPct !== undefined && safeInput.bodyFatPct !== null ? Number(safeInput.bodyFatPct) : undefined;
+  const fatPct = rawFat !== undefined && !isNaN(rawFat) && isFinite(rawFat) && rawFat > 0
+    ? Math.min(Math.max(rawFat, sex === 'female' ? 10.0 : 4.0), sex === 'female' ? 65.0 : 60.0)
+    : undefined;
+
+  // Massa Muscular Esquelética (%):
+  // Proteção contra confusão clássica de balança: usuários frequentemente inserem
+  // % de Massa Magra Total (FFM ~60-70%) no campo de Massa Muscular Esquelética (SMM ~25-35%).
+  const rawMuscle = safeInput.muscleMassPct !== undefined && safeInput.muscleMassPct !== null ? Number(safeInput.muscleMassPct) : undefined;
+  let musclePct: number | undefined = undefined;
+  if (rawMuscle !== undefined && !isNaN(rawMuscle) && isFinite(rawMuscle) && rawMuscle > 0) {
+    let sanitizedMuscle = rawMuscle;
+    const maxFeasibleMuscle = sex === 'female' ? 42.0 : 50.0;
+    if (sanitizedMuscle > maxFeasibleMuscle) {
+      // Detecção de confusão de escala: converte FFM para SMM pelo fator anatômico padrão
+      sanitizedMuscle = sanitizedMuscle * 0.455;
+    }
+    const minFeasibleMuscle = sex === 'female' ? 16.0 : 20.0;
+    musclePct = Math.min(Math.max(Math.round(sanitizedMuscle * 10) / 10, minFeasibleMuscle), maxFeasibleMuscle);
+  }
+
+  // Valores efetivos com fallback contínuo
+  const effectiveFat = fatPct !== undefined ? fatPct : estimatedFat;
+  const effectiveMuscle = musclePct !== undefined ? musclePct : estimatedMuscle;
+
+  const rawWaist = safeInput.waistCm !== undefined && safeInput.waistCm !== null ? Number(safeInput.waistCm) : undefined;
+  const effectiveWaist = rawWaist !== undefined && !isNaN(rawWaist) && rawWaist > 40 && rawWaist < 180
+    ? rawWaist
+    : estimatedWaist;
+
+  // 2. Cálculo do Peso Meta e Diferencial
   const targetWeightKg = Math.round(23.5 * heightM * heightM * 10) / 10;
   const weightDeltaKg = Math.round((weight - targetWeightKg) * 10) / 10;
 
-  // 2. Métricas de Perda de Peso & Redução de Medidas Corporais
+  // 3. Métricas de Perda de Peso & Redução de Medidas Corporais
   const rawInitWeight = Number(safeInput.initialWeightKg);
   const initialWeight = !isNaN(rawInitWeight) && isFinite(rawInitWeight) && rawInitWeight > 0 ? rawInitWeight : weight;
   const weightLostKg = Math.round(Math.max(0, initialWeight - weight) * 10) / 10;
@@ -1070,26 +1117,25 @@ export function evaluateMascot(input: MascotInput): MascotEvaluation {
     waistLostCm = Math.round((weightLostKg * 0.9) * 10) / 10;
   }
 
-  // 3. Determinação Científica do Arquétipo de Bioimpedância
+  // 4. Determinação Científica do Arquétipo de Bioimpedância
   // Considera tanto o estado estático quanto a trajetória metabólica (peso caiu + músculo caiu / gordura subiu = flácido)
   let archetype: MascotArchetype = 'athletic';
 
   // Detecção do Fenômeno "Falso Magro / Flácido" (Catabolismo por má alimentação)
   const isLosingMuscleWhileDieting = weightLostKg > 0.8 && ((fatLostPct !== null && fatLostPct < -0.3) || (muscleDeltaPct !== null && muscleDeltaPct < -0.8));
-  const isStaticSkinnyFat = fatPct !== undefined && fatPct !== null && musclePct !== undefined && musclePct !== null &&
-    fatPct >= (sex === 'female' ? 28.0 : 21.0) &&
-    musclePct < (sex === 'female' ? 28.0 : 33.0) &&
+  const isStaticSkinnyFat = effectiveFat >= (sex === 'female' ? 28.0 : 21.0) &&
+    effectiveMuscle < (sex === 'female' ? 28.0 : 33.0) &&
     bmi < 26.5;
 
   if (isLosingMuscleWhileDieting || isStaticSkinnyFat) {
     archetype = 'skinny_fat';
-  } else if (fatPct !== undefined && fatPct !== null && fatPct > 0) {
+  } else {
     // Critérios clínicos de corte por sexo biológico (SBMEE / ACSM / ABESO)
-    const isExtremeFat = sex === 'female' ? fatPct >= 38.0 || bmi >= 34.0 : fatPct >= 31.0 || bmi >= 34.0;
-    const isHighFat = sex === 'female' ? fatPct >= 31.0 : fatPct >= 24.0;
-    const isExtremeLow = bmi < 18.5 || (fatPct < (sex === 'female' ? 16.0 : 10.0) && (!musclePct || musclePct < (sex === 'female' ? 26.0 : 31.0)));
-    const isLowFat = sex === 'female' ? fatPct < 20.0 : fatPct < 13.0;
-    const isHighMuscle = musclePct ? (sex === 'female' ? musclePct >= 32.0 : musclePct >= 38.0) : false;
+    const isExtremeFat = sex === 'female' ? effectiveFat >= 38.0 || bmi >= 34.0 : effectiveFat >= 31.0 || bmi >= 34.0;
+    const isHighFat = sex === 'female' ? effectiveFat >= 31.0 : effectiveFat >= 24.0;
+    const isExtremeLow = bmi < 18.5 || (effectiveFat < (sex === 'female' ? 16.0 : 10.0) && effectiveMuscle < (sex === 'female' ? 26.0 : 31.0));
+    const isLowFat = sex === 'female' ? effectiveFat < 20.0 : effectiveFat < 13.0;
+    const isHighMuscle = sex === 'female' ? effectiveMuscle >= 31.5 : effectiveMuscle >= 37.5;
 
     if (isExtremeFat) {
       archetype = 'extreme_obese';
@@ -1099,20 +1145,7 @@ export function evaluateMascot(input: MascotInput): MascotEvaluation {
       archetype = 'muscular';
     } else if (isExtremeLow) {
       archetype = 'extreme_lean';
-    } else if (isLowFat && (!musclePct || musclePct < (sex === 'female' ? 28 : 34))) {
-      archetype = 'lean';
-    } else {
-      archetype = 'athletic';
-    }
-  } else {
-    // Fallback por IMC (quando o usuário ainda não registrou balança de bioimpedância)
-    if (bmi >= 34.0) {
-      archetype = 'extreme_obese';
-    } else if (bmi >= 27.0) {
-      archetype = 'robust';
-    } else if (bmi < 18.5) {
-      archetype = 'extreme_lean';
-    } else if (bmi < 20.5) {
+    } else if (isLowFat && effectiveMuscle < (sex === 'female' ? 28 : 34)) {
       archetype = 'lean';
     } else {
       archetype = 'athletic';
@@ -1275,18 +1308,6 @@ export function evaluateMascot(input: MascotInput): MascotEvaluation {
   const baselineMuscle = sex === 'female' ? 28.0 : 34.0;
   const baselineFat = sex === 'female' ? 22.0 : 16.0;
 
-  // Estimativa clínica contínua calibrada quando o usuário ainda não possui bioimpedância
-  let estimatedFat = baselineFat;
-  if (!fatPct) {
-    if (bmi >= 35) estimatedFat = sex === 'female' ? 42.0 : 34.0;
-    else if (bmi >= 30) estimatedFat = sex === 'female' ? 36.0 : 28.0;
-    else if (bmi >= 25) estimatedFat = sex === 'female' ? 29.0 : 22.0;
-    else if (bmi <= 18.5) estimatedFat = sex === 'female' ? 16.0 : 10.0;
-  }
-
-  const effectiveMuscle = musclePct || baselineMuscle;
-  const effectiveFat = fatPct || estimatedFat;
-
   const muscleDiff = effectiveMuscle - baselineMuscle;
   const fatDiff = effectiveFat - baselineFat;
 
@@ -1298,40 +1319,47 @@ export function evaluateMascot(input: MascotInput): MascotEvaluation {
   } else if (archetype === 'extreme_obese') {
     flaccidityFactor = 0.65;
   } else if (archetype === 'robust') {
-    flaccidityFactor = 0.40;
+    flaccidityFactor = 0.45;
   } else if (archetype === 'muscular' || archetype === 'athletic') {
     flaccidityFactor = 0.05;
   } else {
     flaccidityFactor = 0.20;
   }
 
-  // Braços: engrossam e ganham tônus conforme a massa muscular sobe. No falso magro, perdem calibre.
-  let armBulk = Math.min(Math.max(Number((1.0 + muscleDiff * 0.038).toFixed(2)), 0.72), 1.55);
+  // Braços: no sobrepeso/robust, os braços acompanham a compleição mas NÃO exibem bíceps hipertrofiados de competição
+  let armBulk = Math.min(Math.max(Number((1.0 + muscleDiff * 0.025 + Math.max(0, fatDiff) * 0.004).toFixed(2)), 0.72), 1.45);
   if (archetype === 'skinny_fat') armBulk = Math.min(armBulk, 0.86);
-  if (archetype === 'extreme_obese') armBulk = Math.max(armBulk, 1.25);
+  if (archetype === 'robust') armBulk = Math.min(armBulk, 1.06);
+  if (archetype === 'extreme_obese') armBulk = Math.max(armBulk, 1.18);
   if (archetype === 'extreme_lean') armBulk = Math.min(armBulk, 0.76);
 
-  // Pernas: densidade com massa magra. No falso magro, afinam.
-  let legBulk = Math.min(Math.max(Number((1.0 + muscleDiff * 0.026 + (weight - targetWeightKg) * 0.003).toFixed(2)), 0.75), 1.48);
+  // Pernas: base de sustentação do peso corporal total (dimorfismo ginoide acumula mais em coxas/quadris)
+  const legFatFactor = sex === 'female' ? 0.009 : 0.005;
+  let legBulk = Math.min(Math.max(Number((1.0 + muscleDiff * 0.020 + Math.max(0, fatDiff) * legFatFactor + (weight - targetWeightKg) * 0.003).toFixed(2)), 0.75), 1.45);
   if (archetype === 'skinny_fat') legBulk = Math.min(legBulk, 0.88);
-  if (archetype === 'extreme_obese') legBulk = Math.max(legBulk, 1.30);
+  if (archetype === 'robust') legBulk = Math.min(legBulk, 1.12);
+  if (archetype === 'extreme_obese') legBulk = Math.max(legBulk, 1.25);
   if (archetype === 'extreme_lean') legBulk = Math.min(legBulk, 0.78);
 
-  // Abdômen / Barriga: no falso magro, mesmo com peso menor, a barriga continua proeminente e flácida
-  let bellyVolume = Math.min(Math.max(Number((1.0 + fatDiff * 0.032).toFixed(2)), 0.65), 1.65);
-  if (archetype === 'skinny_fat') bellyVolume = Math.max(bellyVolume, 1.22);
-  if (archetype === 'extreme_obese') bellyVolume = Math.max(bellyVolume, 1.48);
+  // Abdômen / Barriga: no robust e sobrepeso, a barriga é saliente e convexa (dimorfismo androide acumula mais no abdômen)
+  const bellyFatFactor = sex === 'female' ? 0.028 : 0.038;
+  let bellyVolume = Math.min(Math.max(Number((1.0 + fatDiff * bellyFatFactor).toFixed(2)), 0.65), 1.70);
+  if (archetype === 'skinny_fat') bellyVolume = Math.max(bellyVolume, 1.25);
+  if (archetype === 'robust') bellyVolume = Math.max(bellyVolume, 1.45);
+  if (archetype === 'extreme_obese') bellyVolume = Math.max(bellyVolume, 1.55);
   if (archetype === 'extreme_lean') bellyVolume = Math.min(bellyVolume, 0.72);
 
-  // Cintura
-  let waistWidth = Math.min(Math.max(Number((0.92 + fatDiff * 0.026).toFixed(2)), 0.70), 1.45);
-  if (archetype === 'skinny_fat') waistWidth = Math.max(waistWidth, 1.10);
-  if (archetype === 'extreme_obese') waistWidth = Math.max(waistWidth, 1.35);
+  // Cintura: larga no sobrepeso para eliminar o V-taper artificial
+  let waistWidth = Math.min(Math.max(Number((0.92 + fatDiff * 0.028).toFixed(2)), 0.70), 1.50);
+  if (archetype === 'skinny_fat') waistWidth = Math.max(waistWidth, 1.12);
+  if (archetype === 'robust') waistWidth = Math.max(waistWidth, 1.30);
+  if (archetype === 'extreme_obese') waistWidth = Math.max(waistWidth, 1.40);
 
-  // Tórax / Ombros (V-Taper)
-  let torsoWidth = Math.min(Math.max(Number((1.0 + muscleDiff * 0.030).toFixed(2)), 0.80), 1.50);
+  // Tórax / Ombros (V-Taper): no sobrepeso, o peitoral não se projeta como armadura sobre a barriga
+  let torsoWidth = Math.min(Math.max(Number((1.0 + muscleDiff * 0.020 + Math.max(0, fatDiff) * 0.004).toFixed(2)), 0.80), 1.40);
   if (archetype === 'skinny_fat') torsoWidth = Math.min(torsoWidth, 0.92);
-  if (archetype === 'extreme_obese') torsoWidth = Math.max(torsoWidth, 1.25);
+  if (archetype === 'robust') torsoWidth = Math.min(torsoWidth, 1.08);
+  if (archetype === 'extreme_obese') torsoWidth = Math.max(torsoWidth, 1.20);
   if (archetype === 'extreme_lean') torsoWidth = Math.min(torsoWidth, 0.82);
 
   // Definição Muscular Fisiológica (0 a 1) baseada nas diretrizes SBMEE/ABESO:
@@ -1343,8 +1371,7 @@ export function evaluateMascot(input: MascotInput): MascotEvaluation {
   let muscleDefinition = 0.05;
   if (effectiveFat >= fatCutoffStart) {
     // Acima de 18.5% (homens) ou 25% (mulheres): a musculatura abdominal permanece encoberta pela camada adiposa.
-    // Revela apenas leve firmeza/tônus em ombros e braços caso a massa muscular seja elevada.
-    muscleDefinition = Math.min(Math.max(Number((0.08 + Math.max(0, muscleDiff) * 0.02).toFixed(2)), 0.05), 0.22);
+    muscleDefinition = Math.min(Math.max(Number((0.05 + Math.max(0, muscleDiff) * 0.01).toFixed(2)), 0.04), 0.12);
   } else if (effectiveFat <= fatCutoffFull) {
     // Padrão ouro / atlético: definição plena com relevo nítido de gominhos e peitoral esculpido
     muscleDefinition = Math.min(Math.max(Number((0.75 + Math.max(0, muscleDiff) * 0.04).toFixed(2)), 0.70), 1.0);
@@ -1352,11 +1379,12 @@ export function evaluateMascot(input: MascotInput): MascotEvaluation {
     // Faixa de transição gradual (entre 18.5% e 12%): os contornos e cortes musculares vão surgindo progressivamente
     const leanFactor = (fatCutoffStart - effectiveFat) / (fatCutoffStart - fatCutoffFull);
     const muscleBonus = Math.max(0, muscleDiff) * 0.025;
-    muscleDefinition = Math.min(Math.max(Number(((0.22 + leanFactor * 0.50 + muscleBonus) * muscleRatio).toFixed(2)), 0.15), 0.95);
+    muscleDefinition = Math.min(Math.max(Number(((0.15 + leanFactor * 0.55 + muscleBonus) * muscleRatio).toFixed(2)), 0.12), 0.95);
   }
 
-  if (archetype === 'skinny_fat' || archetype === 'extreme_obese') {
-    muscleDefinition = 0.05;
+  // No sobrepeso (robust), obesidade ou falso-magro: zero gominhos / definição estática mínima
+  if (archetype === 'skinny_fat' || archetype === 'extreme_obese' || archetype === 'robust') {
+    muscleDefinition = 0.04;
   }
 
   let glowColor = '#22c55e';
@@ -1399,6 +1427,9 @@ export function evaluateMascot(input: MascotInput): MascotEvaluation {
     eyeColor: input.customization?.eyeColor || defaultCustom.eyeColor,
     glovesColor: input.customization?.glovesColor || defaultCustom.glovesColor,
     suitColor: input.customization?.suitColor || defaultCustom.suitColor,
+    topColor: input.customization?.topColor || defaultCustom.topColor,
+    sneakersColor: input.customization?.sneakersColor || defaultCustom.sneakersColor,
+    hairColor: input.customization?.hairColor || defaultCustom.hairColor,
     headbandColor: input.customization?.headbandColor || defaultCustom.headbandColor,
     skinTone: input.customization?.skinTone || defaultCustom.skinTone,
   };
@@ -1414,6 +1445,7 @@ export function evaluateMascot(input: MascotInput): MascotEvaluation {
     glowColor,
     inspectionQuote,
     customization,
+    assetKey,
   };
 
   const milestoneData = evaluateMilestoneLadder(mascotId, progressPercentage, weight);
@@ -1446,6 +1478,9 @@ export function evaluateMascot(input: MascotInput): MascotEvaluation {
     milestoneAssetKey: milestoneData.milestoneAssetKey || `${mascotId}_m${milestoneData.milestoneLevel}`,
     unlockedCosmetics: milestoneData.unlockedCosmetics,
     morphology,
+    effectiveFatPct: effectiveFat,
+    effectiveMusclePct: effectiveMuscle,
+    effectiveWaistCm: effectiveWaist,
   };
 }
 
@@ -1546,3 +1581,84 @@ export function generateHomeMascotSpeech(input: HomeMascotSpeechInput): HomeMasc
     progressPct,
   };
 }
+
+/**
+ * Resultado da análise e autocorreção de entradas de bioimpedância
+ */
+export interface BioCorrectionResult {
+  isCorrected: boolean;
+  originalNum: number;
+  correctedNum: number;
+  correctedStr: string;
+  reason?: 'ffm_to_smm' | 'waist_meters' | 'waist_extreme';
+  message?: string;
+}
+
+/**
+ * Detecta e autocorrige em tempo real a confusão comum de balanças de bioimpedância,
+ * onde o usuário insere % de Massa Magra Total (FFM ~60-70%) no campo de Massa Muscular Esquelética (SMM).
+ */
+export function analyzeAndCorrectMuscleInput(
+  rawInput: string | number,
+  sex: BiologicalSex = 'male'
+): BioCorrectionResult {
+  const cleanStr = String(rawInput || '').replace(',', '.').trim();
+  const num = parseFloat(cleanStr);
+  if (isNaN(num) || num <= 0) {
+    return { isCorrected: false, originalNum: 0, correctedNum: 0, correctedStr: '' };
+  }
+
+  const maxFeasible = sex === 'female' ? 42.0 : 50.0;
+  if (num > maxFeasible) {
+    // Detectada confusão típica de balança: usuário digitou Massa Magra Total (FFM)
+    const converted = Math.round(num * 0.455 * 10) / 10;
+    const clamped = Math.min(Math.max(converted, sex === 'female' ? 18.0 : 22.0), sex === 'female' ? 38.0 : 46.0);
+    return {
+      isCorrected: true,
+      originalNum: num,
+      correctedNum: clamped,
+      correctedStr: clamped.toFixed(1),
+      reason: 'ffm_to_smm',
+      message: `Identificamos ${num}% como Massa Magra Total da sua balança. Ajustado para ${clamped}% de Músculo Esquelético para cálculo anatômico preciso!`,
+    };
+  }
+
+  return { isCorrected: false, originalNum: num, correctedNum: num, correctedStr: cleanStr };
+}
+
+/**
+ * Detecta e autocorrige em tempo real erros de unidade na medida da cintura (metros para centímetros).
+ */
+export function analyzeAndCorrectWaistInput(rawInput: string | number): BioCorrectionResult {
+  const cleanStr = String(rawInput || '').replace(',', '.').trim();
+  const num = parseFloat(cleanStr);
+  if (isNaN(num) || num <= 0) {
+    return { isCorrected: false, originalNum: 0, correctedNum: 0, correctedStr: '' };
+  }
+
+  // Se digitou em metros (ex: 0.82 ou 8.2 em vez de 82 cm)
+  if (num > 0.4 && num < 2.0) {
+    const inCm = Math.round(num * 100 * 10) / 10;
+    return {
+      isCorrected: true,
+      originalNum: num,
+      correctedNum: inCm,
+      correctedStr: String(Math.round(inCm)),
+      reason: 'waist_meters',
+      message: `Convertido de ${num}m para ${inCm} cm de cintura.`,
+    };
+  } else if (num >= 4.0 && num <= 18.0) {
+    const inCm = Math.round(num * 10 * 10) / 10;
+    return {
+      isCorrected: true,
+      originalNum: num,
+      correctedNum: inCm,
+      correctedStr: String(Math.round(inCm)),
+      reason: 'waist_meters',
+      message: `Ajustado de ${num} para ${inCm} cm de cintura.`,
+    };
+  }
+
+  return { isCorrected: false, originalNum: num, correctedNum: num, correctedStr: cleanStr };
+}
+

@@ -1,6 +1,6 @@
 import { View, Text, ScrollView, RefreshControl, TouchableOpacity, StyleSheet, Modal, TextInput, Dimensions, Image, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { api } from '../../core/api';
 import { useRouter } from 'expo-router';
 import { Plus, Droplets, Scale, X, Flame, Dumbbell, Wheat, Droplet, Sparkles, Activity, Clock, Check, Trophy, Palette, Zap, Bell } from 'lucide-react-native';
@@ -13,7 +13,14 @@ import { dataEvents } from '../../core/dataEvents';
 import { ensureFoodDB } from '../../core/foodDB';
 import { CommunityModal } from '../../components/CommunityModal';
 import { calculateBMI } from '../../core/domain/bodyComposition';
-import { evaluateMascot, generateHomeMascotSpeech, type MascotId, type MascotCustomization } from '../../core/domain/avatarEngine';
+import {
+  evaluateMascot,
+  generateHomeMascotSpeech,
+  analyzeAndCorrectMuscleInput,
+  analyzeAndCorrectWaistInput,
+  type MascotId,
+  type MascotCustomization,
+} from '../../core/domain/avatarEngine';
 import { getMascotImage } from '../../assets/avatars';
 import { LivingAvatar3D } from '../../components/LivingAvatar3D';
 import { MascotStudioModal } from '../../components/MascotStudioModal';
@@ -138,6 +145,19 @@ export default function Dashboard() {
     metabolicAge: '',
     notes: '',
   });
+
+  const currentSex = (profile?.sex === 'female' ? 'female' : 'male') as any;
+
+  // Autocorreção Inteligente de Entradas de Bioimpedância durante o Check-in
+  const checkinMuscleCorrection = useMemo(
+    () => analyzeAndCorrectMuscleInput(checkinForm.muscleMass, currentSex),
+    [checkinForm.muscleMass, currentSex]
+  );
+  const checkinWaistCorrection = useMemo(
+    () => analyzeAndCorrectWaistInput(checkinForm.waist),
+    [checkinForm.waist]
+  );
+
   const [savingCheckin, setSavingCheckin] = useState(false);
   const [skippingCheckin, setSkippingCheckin] = useState(false);
   const [inspectCheckinAvatar, setInspectCheckinAvatar] = useState(false);
@@ -279,13 +299,18 @@ export default function Dashboard() {
         if (bmiEval) bmi = bmiEval.bmi;
       }
 
-      const parsedWaist = checkinForm.waist ? parseFloat(checkinForm.waist.replace(',', '.')) : null;
+      const parsedWaist = checkinWaistCorrection.isCorrected
+        ? checkinWaistCorrection.correctedNum
+        : (checkinForm.waist ? parseFloat(checkinForm.waist.replace(',', '.')) : null);
+      const parsedMuscle = checkinMuscleCorrection.isCorrected
+        ? checkinMuscleCorrection.correctedNum
+        : (checkinForm.muscleMass ? parseFloat(checkinForm.muscleMass.replace(',', '.')) : null);
 
       const payload = {
         weight_kg: parsedWeight,
         bmi,
         body_fat_pct: checkinForm.bodyFat ? parseFloat(checkinForm.bodyFat.replace(',', '.')) : null,
-        muscle_mass_pct: checkinForm.muscleMass ? parseFloat(checkinForm.muscleMass.replace(',', '.')) : null,
+        muscle_mass_pct: parsedMuscle,
         body_water_pct: checkinForm.bodyWater ? parseFloat(checkinForm.bodyWater.replace(',', '.')) : null,
         waist_cm: parsedWaist,
         basal_metabolism_kcal: checkinForm.basalMetabolism ? parseInt(checkinForm.basalMetabolism, 10) : null,
@@ -511,7 +536,6 @@ export default function Dashboard() {
   const waterProgress = targets?.water_target_ml ? (summary.water || 0) / targets.water_target_ml : 0;
 
   // Avaliação Dinâmica do Mascote
-  const currentSex = (profile?.sex === 'female' ? 'female' : 'male') as any;
   const currentMascotId: MascotId = (profile?.avatar_mascot_id as MascotId) || (currentSex === 'female' ? 'gaia' : 'tita');
   const mascotEval = evaluateMascot({
     mascotId: currentMascotId,
@@ -543,8 +567,12 @@ export default function Dashboard() {
   // Avaliação Dinâmica em Tempo Real durante o Check-in (conforme o usuário digita peso, gordura, massa muscular)
   const formWeightNum = parseFloat(checkinForm.weight.replace(',', '.'));
   const formFatNum = checkinForm.bodyFat ? parseFloat(checkinForm.bodyFat.replace(',', '.')) : undefined;
-  const formMuscleNum = checkinForm.muscleMass ? parseFloat(checkinForm.muscleMass.replace(',', '.')) : undefined;
-  const formWaistNum = checkinForm.waist ? parseFloat(checkinForm.waist.replace(',', '.')) : undefined;
+  const formMuscleNum = checkinMuscleCorrection.isCorrected
+    ? checkinMuscleCorrection.correctedNum
+    : (checkinForm.muscleMass ? parseFloat(checkinForm.muscleMass.replace(',', '.')) : undefined);
+  const formWaistNum = checkinWaistCorrection.isCorrected
+    ? checkinWaistCorrection.correctedNum
+    : (checkinForm.waist ? parseFloat(checkinForm.waist.replace(',', '.')) : undefined);
 
   const activeCheckinEval = evaluateMascot({
     mascotId: currentMascotId,
@@ -1146,7 +1174,20 @@ export default function Dashboard() {
                     keyboardType="decimal-pad"
                     value={checkinForm.muscleMass}
                     onChangeText={(v) => setCheckinForm((prev) => ({ ...prev, muscleMass: v }))}
+                    onBlur={() => {
+                      if (checkinMuscleCorrection.isCorrected) {
+                        setCheckinForm((prev) => ({ ...prev, muscleMass: checkinMuscleCorrection.correctedStr }));
+                      }
+                    }}
                   />
+                  {checkinMuscleCorrection.isCorrected && (
+                    <View style={styles.correctionNotice}>
+                      <Sparkles color="#38bdf8" size={12} />
+                      <Text style={styles.correctionNoticeText}>
+                        {checkinMuscleCorrection.message}
+                      </Text>
+                    </View>
+                  )}
                 </View>
               </View>
 
@@ -1185,7 +1226,20 @@ export default function Dashboard() {
                   keyboardType="decimal-pad"
                   value={checkinForm.waist}
                   onChangeText={(v) => setCheckinForm((prev) => ({ ...prev, waist: v }))}
+                  onBlur={() => {
+                    if (checkinWaistCorrection.isCorrected) {
+                      setCheckinForm((prev) => ({ ...prev, waist: checkinWaistCorrection.correctedStr }));
+                    }
+                  }}
                 />
+                {checkinWaistCorrection.isCorrected && (
+                  <View style={styles.correctionNotice}>
+                    <Sparkles color="#38bdf8" size={12} />
+                    <Text style={styles.correctionNoticeText}>
+                      {checkinWaistCorrection.message}
+                    </Text>
+                  </View>
+                )}
               </View>
 
               <View style={styles.inputGroup}>
@@ -1942,4 +1996,24 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 4,
   },
+  correctionNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#0c2738',
+    borderColor: '#38bdf880',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    marginTop: 6,
+  },
+  correctionNoticeText: {
+    color: '#bae6fd',
+    fontSize: 11,
+    lineHeight: 15,
+    flex: 1,
+    fontWeight: '500',
+  },
 });
+

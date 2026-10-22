@@ -614,7 +614,54 @@ assert.ok(titaM6Detailed.waistCm < 90, 'Marco 6 do Titã deve ter cintura < 90cm
 
 console.log('✓ 21. avatarEngine: Funcionamento 2D integral de todos os marcos de Titã e Gaia (antropometria, arquivos físicos e ABESO) 100% validado.');
 
+// 22. Testes de Sanitização Fisiológica, Recuperação de Nulos e Proteção contra Deformação 3D
+// 22.1 Caso Ana Isabella: Mulher que digitou 65% de massa muscular (confusão com Massa Magra Total FFM)
+const testAnaIsabella = evaluateMascot({
+  sex: 'female',
+  mascotId: 'gaia',
+  weightKg: 72,
+  heightCm: 170,
+  bodyFatPct: 32.5,
+  muscleMassPct: 65, // Inserção de Massa Magra Total
+});
+assert.ok(testAnaIsabella.effectiveMusclePct < 35, 'Massa muscular esquelética deve ser sanitizada para < 35%');
+assert.ok(testAnaIsabella.effectiveMusclePct > 25, 'Massa muscular esquelética convertida deve ser realista (~29.6%)');
+assert.ok(testAnaIsabella.morphology.armBulk < 1.25, 'Braços não podem virar Hulk/Popeye (deve ser < 1.25)');
+assert.ok(testAnaIsabella.morphology.torsoWidth < 1.20, 'Tronco feminino deve ser esbelto e proporcional (< 1.20)');
+assert.equal(testAnaIsabella.mascotId, 'gaia');
+
+// 22.2 Caso Isabela Morais: Mulher sem bioimpedância aferida (nulos)
+const testIsabela = evaluateMascot({
+  sex: 'female',
+  weightKg: 70,
+  heightCm: 170,
+  bodyFatPct: null,
+  muscleMassPct: null,
+});
+assert.equal(testIsabela.mascotId, 'gaia', 'Mulher deve automaticamente receber o mascote Gaia');
+assert.ok(testIsabela.effectiveFatPct >= 20 && testIsabela.effectiveFatPct <= 35, 'Gordura estimada contínua Deurenberg deve ser fisiológica');
+assert.ok(testIsabela.effectiveMusclePct >= 25 && testIsabela.effectiveMusclePct <= 35, 'Músculo estimado contínuo deve ser fisiológico');
+assert.ok(testIsabela.morphology.customization.topColor, 'Customização deve conter topColor');
+assert.ok(testIsabela.morphology.customization.hairColor, 'Customização deve conter hairColor');
+assert.ok(testIsabela.morphology.customization.sneakersColor, 'Customização deve conter sneakersColor');
+
+// 22.3 Caso Marcus Capobiango: Homem 95kg sem bioimpedância aferida (nulos)
+const testMarcus = evaluateMascot({
+  sex: 'male',
+  weightKg: 95,
+  heightCm: 175,
+  bodyFatPct: null,
+  muscleMassPct: null,
+});
+assert.equal(testMarcus.mascotId, 'tita', 'Homem deve receber o mascote Titã');
+assert.equal(testMarcus.archetype, 'robust', 'Homem de 95kg com 175cm deve ser classificado como robust (IMC 31)');
+assert.ok(testMarcus.morphology.bellyVolume > 1.20, 'Barriga do Titã pesado deve ser projetada (> 1.20)');
+assert.ok(testMarcus.effectiveFatPct >= 24, 'Gordura estimada para IMC 31 deve ser >= 24%');
+
+console.log('✓ 22. avatarEngine: Sanitização fisiológica de FFM, recuperação de nulos Deurenberg e integridade 3D 100% validados.');
+
 console.log('\n🎉 TODOS OS TESTES DOS MOTORES DE DOMÍNIO PASSARAM COM SUCESSO (100% ALINHADOS ÀS DIRETRIZES BRASILEIRAS)!');
+
 
 
 
